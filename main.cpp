@@ -1294,6 +1294,8 @@ int main(int argc, char *argv[]) {
     VkDescriptorSet descriptorSet; // cleanup?
     std::tie(descriptorPool, descriptorSet) = createDescriptorSet(device, descriptorSetLayout);
 
+    bindBufferToDescriptorSet(device, descriptorSet, uniformBuffer);
+
     VkPipelineLayout pipelineLayout = createPipelineLayout(device, descriptorSetLayout);
 
     VkRenderPass renderPass = createRenderPass(device);
@@ -1379,7 +1381,7 @@ int main(int argc, char *argv[]) {
     vkDestroyBuffer(device, uniformBuffer, nullptr);
     vkFreeMemory(device, uniformBufferMemory,  nullptr);
 
-    vkResetDescriptorPool(device, descriptorPool, 0); // set is not allocated with the free bit, so resetting the pool is enough
+    vkResetDescriptorPool(device, descriptorPool, 0);
     vkDestroyDescriptorPool(device, descriptorPool, nullptr);
     vkDestroyDescriptorSetLayout(device, descriptorSetLayout, nullptr);
 

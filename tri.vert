@@ -7,5 +7,5 @@ layout(std140, binding = 0) uniform matrixBuffer {
 
 void main() {
     vec4 vertex = vec4(inPos, 0.0, 1.0);
-    gl_Position = vertex; //viewProjection * vertex;
+    gl_Position = viewProjection * vertex;
 }
