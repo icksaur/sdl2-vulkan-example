@@ -716,9 +716,11 @@ bool createShaderModule(VkDevice device, const std::vector<char>& code, VkShader
     return false;
 }
 
-VkPipelineLayout createPipelineLayout(VkDevice device) {
+VkPipelineLayout createPipelineLayout(VkDevice device, VkDescriptorSetLayout descriptorSetLayout) {
     VkPipelineLayoutCreateInfo pipelineLayoutInfo = {};
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pipelineLayoutInfo.setLayoutCount = 1;
+    pipelineLayoutInfo.pSetLayouts = &descriptorSetLayout;
 
     VkPipelineLayout pipelineLayout;
     if (vkCreatePipelineLayout(device, &pipelineLayoutInfo, nullptr, &pipelineLayout) != VK_SUCCESS) {
@@ -808,7 +810,7 @@ VkPipeline createGraphicsPipeline(VkDevice device, VkPipelineLayout pipelineLayo
     viewport.x = 0.0f;
     viewport.y = 0.0f;
     viewport.width = pipelineInfo.w;
-    viewport.height = pipelineInfo.w;
+    viewport.height = pipelineInfo.h;
     viewport.minDepth = 0.0f;
     viewport.maxDepth = 1.0f;
 
@@ -892,21 +894,15 @@ uint32_t findMemoryType(VkPhysicalDevice physicalDevice, uint32_t memoryTypeBits
     throw std::runtime_error("failed to find suitable memory type!");
 }
 
-std::tuple<VkBuffer, VkDeviceMemory> createVertexBuffer(VkPhysicalDevice gpu, VkDevice device) {
-    std::vector<float> vertices = {
-        0.0f, -0.5f,
-        0.5f,  0.5f,
-        -0.5f,  0.5f 
-    };
-
+std::tuple<VkBuffer, VkDeviceMemory> createBuffer(VkPhysicalDevice gpu, VkDevice device, VkBufferUsageFlagBits usageFlags, size_t byteCount) {
     VkBuffer vertexBuffer;
     VkDeviceMemory vertexBufferMemory;
 
     VkBufferCreateInfo bufferInfo = {};
     bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    bufferInfo.size = sizeof(vertices[0]) * vertices.size();  // Size in bytes
-    bufferInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;     // Vertex buffer usage
-    bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;       // Not shared across multiple queue families
+    bufferInfo.size = byteCount;
+    bufferInfo.usage = usageFlags;
+    bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE; // Not shared across multiple queue families
 
     if (vkCreateBuffer(device, &bufferInfo, nullptr, &vertexBuffer) != VK_SUCCESS) {
         throw std::runtime_error("failed to create vertex buffer!");
@@ -924,14 +920,114 @@ std::tuple<VkBuffer, VkDeviceMemory> createVertexBuffer(VkPhysicalDevice gpu, Vk
         throw std::runtime_error("failed to allocate vertex buffer memory!");
     }
 
+    return std::make_tuple(vertexBuffer, vertexBufferMemory);
+}
+
+std::tuple<VkBuffer, VkDeviceMemory> createUniformbuffer(VkPhysicalDevice gpu, VkDevice device) {
+    VkBuffer uniformBuffer;
+    VkDeviceMemory uniformBufferMemory;
+
+    float identityMatrix[]{ 1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1 };
+
+    size_t byteCount = sizeof(float)*16; // 4x4 matrix
+    std::tie(uniformBuffer, uniformBufferMemory) = createBuffer(gpu, device, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, byteCount);
+
+    // Bind the allocated memory to the buffer
+    vkBindBufferMemory(device, uniformBuffer, uniformBufferMemory, 0);
+    void* data;
+    vkMapMemory(device, uniformBufferMemory, 0, byteCount, 0, &data);  // Map memory to CPU-accessible address
+    memcpy(data, identityMatrix, (size_t)byteCount);                // Copy vertex data
+    vkUnmapMemory(device, uniformBufferMemory);                              // Unmap memory after copying
+
+    return std::make_tuple(uniformBuffer, uniformBufferMemory);
+}
+
+std::tuple<VkBuffer, VkDeviceMemory> createVertexBuffer(VkPhysicalDevice gpu, VkDevice device) {
+    float vertices[] {
+        0.0f, -0.5f,
+        0.5f, 0.5f,
+        -0.5f, 0.5f
+    };
+
+    VkBuffer vertexBuffer;
+    VkDeviceMemory vertexBufferMemory;
+
+    size_t byteCount = sizeof(float)*6;
+    std::tie(vertexBuffer, vertexBufferMemory) = createBuffer(gpu, device, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, byteCount);
+
     // Bind the allocated memory to the buffer
     vkBindBufferMemory(device, vertexBuffer, vertexBufferMemory, 0);
     void* data;
-    vkMapMemory(device, vertexBufferMemory, 0, bufferInfo.size, 0, &data);  // Map memory to CPU-accessible address
-    memcpy(data, vertices.data(), (size_t) bufferInfo.size);                // Copy vertex data
+    vkMapMemory(device, vertexBufferMemory, 0, byteCount, 0, &data);  // Map memory to CPU-accessible address
+    memcpy(data, vertices, (size_t)byteCount);                // Copy vertex data
     vkUnmapMemory(device, vertexBufferMemory);                              // Unmap memory after copying
 
     return std::make_tuple(vertexBuffer, vertexBufferMemory);
+}
+
+VkDescriptorSetLayout createDescriptorSetLayout(VkDevice device) {
+    VkDescriptorSetLayoutBinding uboLayoutBinding = {};
+    uboLayoutBinding.binding = 0;
+    uboLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    uboLayoutBinding.descriptorCount = 1;
+    uboLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    uboLayoutBinding.pImmutableSamplers = nullptr;  // No sampler here
+
+    VkDescriptorSetLayoutCreateInfo layoutInfo = {};
+    layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    layoutInfo.bindingCount = 1;
+    layoutInfo.pBindings = &uboLayoutBinding;
+
+    VkDescriptorSetLayout descriptorSetLayout;
+    if (vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &descriptorSetLayout) != VK_SUCCESS) {
+        throw std::runtime_error("failed to create descriptor set layout");
+    }
+
+    return descriptorSetLayout;
+}
+
+std::tuple<VkDescriptorPool, VkDescriptorSet> createDescriptorSet(VkDevice device, VkDescriptorSetLayout descriptorSetLayout) {
+    VkDescriptorPoolSize poolSize = {};
+    poolSize.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    poolSize.descriptorCount = 1;
+
+    VkDescriptorPoolCreateInfo descriptorPoolCreateInfo = {};
+    descriptorPoolCreateInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    descriptorPoolCreateInfo.poolSizeCount = 1;
+    descriptorPoolCreateInfo.pPoolSizes = &poolSize;
+    descriptorPoolCreateInfo.maxSets = 1;
+
+    VkDescriptorPool descriptorPool;
+    vkCreateDescriptorPool(device, &descriptorPoolCreateInfo, nullptr, &descriptorPool);
+
+    VkDescriptorSetAllocateInfo allocInfo  = {};
+    allocInfo.sType  = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocInfo.descriptorPool  = descriptorPool;
+    allocInfo.descriptorSetCount  = 1;
+    allocInfo.pSetLayouts = &descriptorSetLayout;
+
+    VkDescriptorSet descriptorSet;
+    vkAllocateDescriptorSets(device, &allocInfo, &descriptorSet);
+
+    return std::make_tuple(descriptorPool, descriptorSet);
+}
+
+void bindBufferToDescriptorSet(VkDevice device, VkDescriptorSet descriptorSet, VkBuffer uniformBuffer) {
+    VkDescriptorBufferInfo bufferInfo = {};
+    bufferInfo.buffer = uniformBuffer;
+    bufferInfo.offset = 0;
+    bufferInfo.range = sizeof(float)*16;
+
+    VkWriteDescriptorSet descriptorWrite = {};
+    descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    descriptorWrite.dstSet = descriptorSet;
+    descriptorWrite.dstBinding = 0;
+    descriptorWrite.dstArrayElement = 0;
+    descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    descriptorWrite.descriptorCount = 1;
+    descriptorWrite.pBufferInfo = &bufferInfo;
+
+    vkUpdateDescriptorSets(device, 1, &descriptorWrite, 0, nullptr);
 }
 
 VkCommandPool createCommandPool(VkDevice device, uint32_t queueFamilyIndex) {
@@ -949,13 +1045,13 @@ VkCommandPool createCommandPool(VkDevice device, uint32_t queueFamilyIndex) {
     return commandPool;
 }
 
-VkCommandBuffer createCommandBuffer(VkDevice device, VkPipeline graphicsPipeline, VkCommandPool commandPool, VkBuffer vertexBuffer) {
+VkCommandBuffer createCommandBuffer(VkDevice device, VkPipeline graphicsPipeline, VkCommandPool commandPool) {
     VkCommandBuffer commandBuffer;
 
     VkCommandBufferAllocateInfo allocInfo = {};
     allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
     allocInfo.commandPool = commandPool;  // The command pool you created earlier
-    allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;  // Primary command buffer (can be directly submitted)
+    allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY; // primary can be submitted, secondary can be a sub-command of primaries
     allocInfo.commandBufferCount = 1;  // Number of command buffers to allocate
 
     if (vkAllocateCommandBuffers(device, &allocInfo, &commandBuffer) != VK_SUCCESS) {
@@ -1007,7 +1103,15 @@ VkFence createFence(VkDevice device) {
     return fence;
 }
 
-void recordRenderPass(VkPipeline graphicsPipeline, VkRenderPass renderPass, VkFramebuffer framebuffer, VkCommandBuffer commandBuffer, VkBuffer vertexBuffer) {
+void recordRenderPass(
+    VkPipeline graphicsPipeline,
+    VkRenderPass renderPass,
+    VkFramebuffer framebuffer,
+    VkCommandBuffer commandBuffer,
+    VkBuffer vertexBuffer,
+    VkPipelineLayout pipelineLayout,
+    VkDescriptorSet descriptorSet
+) {
     VkCommandBufferBeginInfo beginInfo = {};
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT;  // Can be resubmitted multiple times
@@ -1033,10 +1137,13 @@ void recordRenderPass(VkPipeline graphicsPipeline, VkRenderPass renderPass, VkFr
     renderPassBeginInfo.clearValueCount = 2;                 // Two clear values (color and depth)
     renderPassBeginInfo.pClearValues = clearValues;
 
-    // record the render pass
+    // begin recording the render pass
     vkCmdBeginRenderPass(commandBuffer, &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
 
+    // Bind the descriptor which contains the shader uniform buffer
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
+
+    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &descriptorSet, 0, NULL);
 
     VkDeviceSize offsets[] = { 0 };
     vkCmdBindVertexBuffers(commandBuffer, 0, 1, &vertexBuffer, offsets);  // Bind the vertex buffer
@@ -1174,10 +1281,20 @@ int main(int argc, char *argv[]) {
     VkQueue graphics_queue;
     vkGetDeviceQueue(device, graphicsQueueIndex, 0, &graphics_queue);
 
-    VkShaderModule vertShader = loadShaderModule(device, "vert.spv");
-    VkShaderModule fragShader = loadShaderModule(device, "frag.spv");
+    VkShaderModule vertShader = loadShaderModule(device, "tri.vert.spv");
+    VkShaderModule fragShader = loadShaderModule(device, "tri.frag.spv");
 
-    VkPipelineLayout pipelineLayout = createPipelineLayout(device);
+    VkBuffer uniformBuffer;
+    VkDeviceMemory uniformBufferMemory;
+    std::tie(uniformBuffer, uniformBufferMemory) = createUniformbuffer(gpu, device);
+
+    VkDescriptorSetLayout descriptorSetLayout = createDescriptorSetLayout(device);
+    
+    VkDescriptorPool descriptorPool;
+    VkDescriptorSet descriptorSet; // cleanup?
+    std::tie(descriptorPool, descriptorSet) = createDescriptorSet(device, descriptorSetLayout);
+
+    VkPipelineLayout pipelineLayout = createPipelineLayout(device, descriptorSetLayout);
 
     VkRenderPass renderPass = createRenderPass(device);
 
@@ -1192,9 +1309,10 @@ int main(int argc, char *argv[]) {
     VkDeviceMemory deviceMemory;
     std::tie(vertexBuffer, deviceMemory) = createVertexBuffer(gpu, device);
 
+
     std::vector<VkCommandBuffer> commandBuffers(chainImages.size());
     for (auto & commandBuffer : commandBuffers) {
-        commandBuffer = createCommandBuffer(device, pipeline, commandPool, vertexBuffer);
+        commandBuffer = createCommandBuffer(device, pipeline, commandPool);
     }
 
     VkSemaphore imageAvailableSemaphore = createSemaphore(device);
@@ -1220,7 +1338,7 @@ int main(int argc, char *argv[]) {
             throw std::runtime_error("vkAcquireNextImageKHR failed");
         }
 
-        recordRenderPass(pipeline, renderPass, frameBuffers[nextImage], commandBuffers[nextImage], vertexBuffer);
+        recordRenderPass(pipeline, renderPass, frameBuffers[nextImage], commandBuffers[nextImage], vertexBuffer, pipelineLayout, descriptorSet);
         submitCommandBuffer(graphics_queue, commandBuffers[nextImage], imageAvailableSemaphore, renderFinishedSemaphore);
         if (!presentQueue(presentationQueue, swapchain, renderFinishedSemaphore, nextImage)) {
             std::cout << "swap chain out of date, trying to remake" << std::endl;
@@ -1258,6 +1376,12 @@ int main(int argc, char *argv[]) {
     vkDestroyCommandPool(device, commandPool, nullptr);
     vkDestroyBuffer(device, vertexBuffer, nullptr);
     vkFreeMemory(device, deviceMemory, nullptr);
+    vkDestroyBuffer(device, uniformBuffer, nullptr);
+    vkFreeMemory(device, uniformBufferMemory,  nullptr);
+
+    vkResetDescriptorPool(device, descriptorPool, 0); // set is not allocated with the free bit, so resetting the pool is enough
+    vkDestroyDescriptorPool(device, descriptorPool, nullptr);
+    vkDestroyDescriptorSetLayout(device, descriptorSetLayout, nullptr);
 
     vkDestroySemaphore(device, imageAvailableSemaphore, nullptr);
     vkDestroySemaphore(device, renderFinishedSemaphore, nullptr);
