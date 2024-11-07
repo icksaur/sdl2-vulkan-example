@@ -139,8 +139,8 @@ void * read_tga(const std::vector<char> & bytes, unsigned & width, unsigned & he
 
     const unsigned char SCREEN_ORIGIN_BIT = 0x20;
 
-    if (header.image_descriptor & SCREEN_ORIGIN_BIT) {
-        // origin is in topleft, flip rows
+    if (header.image_descriptor & SCREEN_ORIGIN_BIT == 0) {
+        // origin is in bottom-left, which is opposite of Vulkan convention, so flip the image rows
         u_char * source = (u_char*)pixels;
         u_char * flipped = (u_char*)malloc(pixels_size);
         unsigned rowSize = pixelSize * width;

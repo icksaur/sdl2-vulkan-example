@@ -729,7 +729,8 @@ std::tuple<VkImage, VkDeviceMemory, VkFormat> createImageFromTGAFile(const char 
 
     unsigned tgaByteCount = width*height*(bpp/8);
 
-    VkFormat format = (bpp == 32) ? VK_FORMAT_R8G8B8A8_UNORM : VK_FORMAT_R8G8B8_UNORM;
+    // TGA is BGR, not RGB
+    VkFormat format = (bpp == 32) ? VK_FORMAT_B8G8R8A8_SRGB : VK_FORMAT_B8G8R8_SRGB;
 
     // put the image bytes into a buffer for transitioning
     VkBuffer stagingBuffer;
@@ -1187,13 +1188,15 @@ std::tuple<VkBuffer, VkDeviceMemory> createUniformbuffer(VkPhysicalDevice gpu, V
 }
 
 std::tuple<VkBuffer, VkDeviceMemory> createVertexBuffer(VkPhysicalDevice gpu, VkDevice device) {
+    // Vulkan clip space has -1,-1 as the upper-left corner of the display and Y increases as you go down.
+    // This is similar to most window system conventions and file formats.
     float vertices[] {
-        -0.5f, -0.5f, 0.0f, 1.0f,
-        0.5f, -0.5f, 1.0f, 1.0f,
-        -0.5f, 0.5f, 0.0f, 0.0f,
-        -0.5f, 0.5f, 0.0f, 0.0f,
-        0.5f, -0.5f, 1.0f, 1.0f,
-        0.5f, 0.5f, 1.0f, 0.0f,
+        -0.5f, -0.5f, 0.0f, 0.0f,
+        0.5f, -0.5f, 1.0f, 0.0f,
+        -0.5f, 0.5f, 0.0f, 1.0f,
+        -0.5f, 0.5f, 0.0f, 1.0f,
+        0.5f, -0.5f, 1.0f, 0.0f,
+        0.5f, 0.5f, 1.0f, 1.0f,
     };
 
     VkBuffer vertexBuffer;

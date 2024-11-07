@@ -28,4 +28,5 @@ syntax: glob
 *.VC.db
 .vs/*
 .cache/*
-malib
+vulkan
+*.spv
