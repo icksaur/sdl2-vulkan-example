@@ -1331,7 +1331,7 @@ VkCommandBuffer createCommandBuffer(VkDevice device, VkPipeline graphicsPipeline
 
     VkCommandBufferAllocateInfo allocInfo = {};
     allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-    allocInfo.commandPool = commandPool;  // The command pool you created earlier
+    allocInfo.commandPool = commandPool;
     allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY; // primary can be submitted, secondary can be a sub-command of primaries
     allocInfo.commandBufferCount = 1;  // Number of command buffers to allocate
 
@@ -1545,12 +1545,11 @@ int main(int argc, char *argv[]) {
 
     VkQueue presentationQueue = getPresentationQueue(gpu, device, graphicsQueueIndex, presentation_surface);
 
-    // Create swap chain
+    // swap chain with image handles and views
     VkSwapchainKHR swapchain = NULL;
     if (!createSwapChain(presentation_surface, gpu, device, swapchain))
         return -1;
 
-    // Get image handles from swap chain
     std::vector<VkImage> chainImages;
     if (!getSwapChainImageHandles(device, swapchain, chainImages))
         return -1;
@@ -1558,21 +1557,17 @@ int main(int argc, char *argv[]) {
     std::vector<VkImageView> chainImageViews(chainImages.size());
     makeChainImageViews(device, swapchain, chainImages, chainImageViews);
 
-    // Fetch the queue we want to submit the actual commands to
+    // get the queue we want to submit the actual commands to
     VkQueue graphicsQueue;
     vkGetDeviceQueue(device, graphicsQueueIndex, 0, &graphicsQueue);
 
     VkCommandPool commandPool = createCommandPool(device, graphicsQueueIndex);
 
+    // shader objects, to be 
     VkShaderModule vertShader = loadShaderModule(device, "tri.vert.spv");
     VkShaderModule fragShader = loadShaderModule(device, "tri.frag.spv");
 
-    // uniform buffer for our view projection matrix
-    VkBuffer uniformBuffer;
-    VkDeviceMemory uniformBufferMemory;
-    std::tie(uniformBuffer, uniformBufferMemory) = createUniformbuffer(gpu, device);
-
-    // texture for sampling
+    // image for sampling
     VkDeviceMemory textureImageMemory;
     VkImage textureImage;
     VkFormat textureImageFormat;
@@ -1581,7 +1576,12 @@ int main(int argc, char *argv[]) {
     VkImageView textureImageView = createImageView(device, textureImage, textureImageFormat);
     VkSampler textureSampler = createSampler(device);
 
-    // descriptor of uniforms, both buffer and sampler
+    // uniform buffer for our view projection matrix
+    VkBuffer uniformBuffer;
+    VkDeviceMemory uniformBufferMemory;
+    std::tie(uniformBuffer, uniformBufferMemory) = createUniformbuffer(gpu, device);
+
+    // descriptor of uniforms, both uniform buffer and sampler
     VkDescriptorSetLayout descriptorSetLayout = createDescriptorSetLayout(device);
     
     VkDescriptorPool descriptorPool;
@@ -1620,6 +1620,7 @@ int main(int argc, char *argv[]) {
     }
 
     // sync primitives
+    // It is a good idea to have a separate semaphore for each swapchain image, but for simplicity we use a single one.
     VkSemaphore imageAvailableSemaphore = createSemaphore(device);
     VkSemaphore renderFinishedSemaphore = createSemaphore(device);
     VkFence fence = createFence(device);
@@ -1646,7 +1647,8 @@ int main(int argc, char *argv[]) {
         submitCommandBuffer(graphicsQueue, commandBuffers[nextImage], imageAvailableSemaphore, renderFinishedSemaphore);
         if (!presentQueue(presentationQueue, swapchain, renderFinishedSemaphore, nextImage)) {
             std::cout << "swap chain out of date, trying to remake" << std::endl;
-            // remake framebuffers, image views, and swap chain
+            // This is a common Vulkan situation handled automatically by OpenGL.
+            // We need to remake our swap chain, image views, and framebuffers.
             vkDeviceWaitIdle(device);
             for (VkFramebuffer framebuffer : frameBuffers) {
                 vkDestroyFramebuffer(device, framebuffer, nullptr);
@@ -1683,7 +1685,7 @@ int main(int argc, char *argv[]) {
     vkDestroyBuffer(device, uniformBuffer, nullptr);
     vkFreeMemory(device, uniformBufferMemory,  nullptr);
 
-    // freeing each descriptor requires the pool have the "free" bit. Look online for individual free 
+    // freeing each descriptor requires the pool have the "free" bit. Look online for use cases for individual free.
     vkResetDescriptorPool(device, descriptorPool, 0); // frees all the descriptors
     vkDestroyDescriptorPool(device, descriptorPool, nullptr);
     vkDestroyDescriptorSetLayout(device, descriptorSetLayout, nullptr);
