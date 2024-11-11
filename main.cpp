@@ -1,5 +1,3 @@
-// g++ -g -lSDL2 -lSDL2main -lvulkan main.cpp
-
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_vulkan.h>
 #include <vulkan/vulkan.h>
@@ -12,17 +10,19 @@
 #include <assert.h>
 
 #include "tga.h"
+#include "math.h"
+#include "camera.h"
 
 // Global Settings
-const char                      gAppName[] = "VulkanTest";
-const char                      gEngineName[] = "VulkanTestEngine";
-int                             gWindowWidth = 1280;
-int                             gWindowHeight = 720;
-VkPresentModeKHR                gPresentationMode = VK_PRESENT_MODE_FIFO_RELAXED_KHR;
-VkSurfaceTransformFlagBitsKHR   gTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
-VkFormat                        gFormat = VK_FORMAT_B8G8R8A8_SRGB;
-VkColorSpaceKHR                 gColorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
-VkImageUsageFlags               gImageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+const char * appName = "VulkanTest";
+const char * engineName = "VulkanTestEngine";
+int windowWidth = 1280;
+int windowHeight = 720;
+VkPresentModeKHR presentationMode = VK_PRESENT_MODE_FIFO_RELAXED_KHR;
+VkSurfaceTransformFlagBitsKHR desiredTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
+VkFormat surfaceFormat = VK_FORMAT_B8G8R8A8_SRGB;
+VkColorSpaceKHR colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+VkImageUsageFlags desiredImageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
 
 struct PipelineInfo {
     float w, h;
@@ -35,18 +35,6 @@ std::vector<char> readFileBytes(std::istream & file) {
         std::istreambuf_iterator<char>(file),
         std::istreambuf_iterator<char>());
 }
-
-/**
- * This demo attempts to create a window and vulkan compatible surface using SDL
- * Verified and tested using multiple CPUs under windows.
- * Should work on every other SDL / Vulkan supported operating system (OSX, Linux, Android)
- * main() clearly outlines all the specific steps taken to create a vulkan instance,
- * select a device, create a vulkan compatible surface (opaque) associated with a window.
- */
-
-//////////////////////////////////////////////////////////////////////////
-// Global Settings
-//////////////////////////////////////////////////////////////////////////
 
 const std::set<std::string>& getRequestedLayerNames() {
     static std::set<std::string> layers;
@@ -68,7 +56,7 @@ const std::set<std::string>& getRequestedDeviceExtensionNames() {
 const std::vector<VkImageUsageFlags> getRequestedImageUsages() {
     static std::vector<VkImageUsageFlags> usages;
     if (usages.empty()) {
-        usages.emplace_back(VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT);
+        usages.emplace_back(desiredImageUsage);
     }
     return usages;
 }
@@ -216,9 +204,9 @@ bool createVulkanInstance(const std::vector<std::string>& layerNames, const std:
     VkApplicationInfo app_info = {};
     app_info.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
     app_info.pNext = NULL;
-    app_info.pApplicationName = gAppName;
+    app_info.pApplicationName = appName;
     app_info.applicationVersion = 1;
-    app_info.pEngineName = gEngineName;
+    app_info.pEngineName = engineName;
     app_info.engineVersion = 1;
     app_info.apiVersion = VK_API_VERSION_1_0;
 
@@ -468,7 +456,7 @@ unsigned int getNumberOfSwapImages(const VkSurfaceCapabilitiesKHR& capabilities)
 
 VkExtent2D getSwapImageSize(const VkSurfaceCapabilitiesKHR& capabilities) {
     // Default size = window size
-    VkExtent2D size = { (unsigned int)gWindowWidth, (unsigned int)gWindowHeight };
+    VkExtent2D size = { (unsigned int)windowWidth, (unsigned int)windowHeight };
 
     // This happens when the window scales based on the size of an image
     if (capabilities.currentExtent.width == 0xFFFFFFF) {
@@ -480,33 +468,30 @@ VkExtent2D getSwapImageSize(const VkSurfaceCapabilitiesKHR& capabilities) {
     return size;
 }
 
-bool getImageUsage(const VkSurfaceCapabilitiesKHR& capabilities, VkImageUsageFlags& outUsage) {
-    const std::vector<VkImageUsageFlags>& desir_usages = getRequestedImageUsages();
-    assert(desir_usages.size() > 0);
+bool getImageUsage(const VkSurfaceCapabilitiesKHR& capabilities, VkImageUsageFlags& foundUsages) {
+    const std::vector<VkImageUsageFlags> desiredUsages{desiredImageUsage};
 
-    // Needs to be always present
-    outUsage = desir_usages[0];
+    foundUsages = desiredUsages[0];
 
-    for (const auto& desired_usage : desir_usages)
-    {
-        VkImageUsageFlags image_usage = desired_usage & capabilities.supportedUsageFlags;
-        if (image_usage != desired_usage) {
-            std::cout << "unsupported image usage flag: " << desired_usage << "\n";
+    for (const auto& usage : desiredUsages) {
+        VkImageUsageFlags image_usage = usage & capabilities.supportedUsageFlags;
+        if (image_usage != usage) {
+            std::cout << "unsupported image usage flag: " << usage << "\n";
             return false;
         }
 
         // Add bit if found as supported color
-        outUsage = (outUsage | desired_usage);
+        foundUsages = (foundUsages | usage);
     }
 
     return true;
 }
 
 VkSurfaceTransformFlagBitsKHR getSurfaceTransform(const VkSurfaceCapabilitiesKHR& capabilities) {
-    if (capabilities.supportedTransforms & gTransform) {
-        return gTransform;
+    if (capabilities.supportedTransforms & desiredTransform) {
+        return desiredTransform;
     }
-    std::cout << "unsupported surface transform: " << gTransform;
+    std::cout << "unsupported surface transform: " << desiredTransform;
     return capabilities.currentTransform;
 }
 
@@ -540,19 +525,19 @@ bool getSurfaceFormat(VkPhysicalDevice device, VkSurfaceKHR surface, VkSurfaceFo
     // This means there are no restrictions on the supported format.
     // Preference would work
     if (found_formats.size() == 1 && found_formats[0].format == VK_FORMAT_UNDEFINED) {
-        outFormat.format = gFormat;
-        outFormat.colorSpace = gColorSpace;
+        outFormat.format = surfaceFormat;
+        outFormat.colorSpace = colorSpace;
         return true;
     }
 
     // Otherwise check if both are supported
     for (const auto& found_format_outer : found_formats) {
         // Format found
-        if (found_format_outer.format == gFormat) {
+        if (found_format_outer.format == surfaceFormat) {
             outFormat.format = found_format_outer.format;
             for (const auto& found_format_inner : found_formats) {
                 // Color space found
-                if (found_format_inner.colorSpace == gColorSpace) {
+                if (found_format_inner.colorSpace == colorSpace) {
                     outFormat.colorSpace = found_format_inner.colorSpace;
                     return true;
                 }
@@ -729,7 +714,11 @@ std::tuple<VkImage, VkDeviceMemory, VkFormat> createImageFromTGAFile(const char 
 
     unsigned tgaByteCount = width*height*(bpp/8);
 
-    // TGA is BGR, not RGB
+    // TGA is BGR order, not RGB
+    // Further, TGA does not specify linear or non-linear color component intensity.
+    // By convention, TGA values are going to be "gamma corrected" or non-linear.
+    // Assuming the bytes are sRGB looks good.  If they are assumed to be linear here, the colors will be washed out.
+    // Read more by looking up sRGB to linear Vulkan conversions.
     VkFormat format = (bpp == 32) ? VK_FORMAT_B8G8R8A8_SRGB : VK_FORMAT_B8G8R8_SRGB;
 
     // put the image bytes into a buffer for transitioning
@@ -754,7 +743,7 @@ std::tuple<VkImage, VkDeviceMemory, VkFormat> createImageFromTGAFile(const char 
     imageInfo.format = format;
     imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
     imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED; // we must "transition" this image to a device-optimal format
-    imageInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT; // copying to this image, and sampling from it
+    imageInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT; // copying bytes to this image, and later sampling from it
     imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
     imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
@@ -775,10 +764,13 @@ std::tuple<VkImage, VkDeviceMemory, VkFormat> createImageFromTGAFile(const char 
     }
     vkBindImageMemory(device, image, memory, 0);
 
+    // Vulkan spec says images MUST be created either undefined or preinitialized layout, so we can't jump straight to DST_OPTIMAL.
     transitionImageLayout(device, commandPool, graphicsQueue, image, format, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
 
+    // Now the image is in DST_OPTIMAL layout and we can copy the image data to it.
     copyBufferToImage(device, commandPool, graphicsQueue, stagingBuffer, image, width, height);
 
+    // Transition to the final 2D image layout that allows us to sample in a shader.
     transitionImageLayout(device, commandPool, graphicsQueue, image, format, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
     vkFreeMemory(device, stagingMemory, nullptr);
@@ -791,23 +783,23 @@ bool createSwapChain(VkSurfaceKHR surface, VkPhysicalDevice physicalDevice, VkDe
     vkDeviceWaitIdle(device);
 
     // Get properties of surface, necessary for creation of swap-chain
-    VkSurfaceCapabilitiesKHR surface_properties;
-    if (!getSurfaceProperties(physicalDevice, surface, surface_properties)) {
+    VkSurfaceCapabilitiesKHR surfaceProperties;
+    if (!getSurfaceProperties(physicalDevice, surface, surfaceProperties)) {
         return false;
     }
 
     // Get the image presentation mode (synced, immediate etc.)
-    VkPresentModeKHR presentation_mode = gPresentationMode;
+    VkPresentModeKHR presentation_mode = presentationMode;
     if (!getPresentationMode(surface, physicalDevice, presentation_mode)) {
         return false;
     }
 
     // Get other swap chain related features
-    unsigned int swapImageCount = getNumberOfSwapImages(surface_properties);
+    unsigned int swapImageCount = getNumberOfSwapImages(surfaceProperties);
     std::cout << "swap chain image count: " << swapImageCount << std::endl;
 
     // Size of the images
-    VkExtent2D swap_image_extent = getSwapImageSize(surface_properties);
+    VkExtent2D swap_image_extent = getSwapImageSize(surfaceProperties);
 
     pipelineInfo.w = (float)swap_image_extent.width;
     pipelineInfo.h = (float)swap_image_extent.height;
@@ -815,13 +807,13 @@ bool createSwapChain(VkSurfaceKHR surface, VkPhysicalDevice physicalDevice, VkDe
     pipelineInfo.extent.width = pipelineInfo.w;
 
     // Get image usage (color etc.)
-    VkImageUsageFlags usage_flags;
-    if (!getImageUsage(surface_properties, usage_flags)) {
+    VkImageUsageFlags usageFlags;
+    if (!getImageUsage(surfaceProperties, usageFlags)) {
         return false;
     }
 
     // Get the transform, falls back on current transform when transform is not supported
-    VkSurfaceTransformFlagBitsKHR transform = getSurfaceTransform(surface_properties);
+    VkSurfaceTransformFlagBitsKHR transform = getSurfaceTransform(surfaceProperties);
 
     // Get swapchain image format
     VkSurfaceFormatKHR imageFormat;
@@ -832,43 +824,43 @@ bool createSwapChain(VkSurfaceKHR surface, VkPhysicalDevice physicalDevice, VkDe
     pipelineInfo.colorFormat = imageFormat.format;
 
     // Old swap chain
-    VkSwapchainKHR old_swap_chain = outSwapChain;
+    VkSwapchainKHR oldSwapChain = outSwapChain;
 
     // Populate swapchain creation info
-    VkSwapchainCreateInfoKHR swap_info;
-    swap_info.pNext = nullptr;
-    swap_info.flags = 0;
-    swap_info.surface = surface;
-    swap_info.minImageCount = swapImageCount;
-    swap_info.imageFormat = imageFormat.format;
-    swap_info.imageColorSpace = imageFormat.colorSpace;
-    swap_info.imageExtent = swap_image_extent;
-    swap_info.imageArrayLayers = 1;
-    swap_info.imageUsage = usage_flags;
-    swap_info.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    swap_info.queueFamilyIndexCount = 0;
-    swap_info.pQueueFamilyIndices = nullptr;
-    swap_info.preTransform = transform;
-    swap_info.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
-    swap_info.presentMode = presentation_mode;
-    swap_info.clipped = true;
-    swap_info.oldSwapchain = NULL;
-    swap_info.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
+    VkSwapchainCreateInfoKHR swapInfo;
+    swapInfo.pNext = nullptr;
+    swapInfo.flags = 0;
+    swapInfo.surface = surface;
+    swapInfo.minImageCount = swapImageCount;
+    swapInfo.imageFormat = imageFormat.format;
+    swapInfo.imageColorSpace = imageFormat.colorSpace;
+    swapInfo.imageExtent = swap_image_extent;
+    swapInfo.imageArrayLayers = 1;
+    swapInfo.imageUsage = usageFlags;
+    swapInfo.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    swapInfo.queueFamilyIndexCount = 0;
+    swapInfo.pQueueFamilyIndices = nullptr;
+    swapInfo.preTransform = transform;
+    swapInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+    swapInfo.presentMode = presentation_mode;
+    swapInfo.clipped = true;
+    swapInfo.oldSwapchain = NULL;
+    swapInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
 
     // Destroy old swap chain
-    if (old_swap_chain != VK_NULL_HANDLE) {
-        vkDestroySwapchainKHR(device, old_swap_chain, nullptr);
-        old_swap_chain = VK_NULL_HANDLE;
+    if (oldSwapChain != VK_NULL_HANDLE) {
+        vkDestroySwapchainKHR(device, oldSwapChain, nullptr);
+        oldSwapChain = VK_NULL_HANDLE;
     }
 
     // Create new one
-    if (vkCreateSwapchainKHR(device, &swap_info, nullptr, &old_swap_chain) != VK_SUCCESS) {
+    if (vkCreateSwapchainKHR(device, &swapInfo, nullptr, &oldSwapChain) != VK_SUCCESS) {
         std::cout << "unable to create swap chain\n";
         return false;
     }
 
     // Store handle
-    outSwapChain = old_swap_chain;
+    outSwapChain = oldSwapChain;
     return true;
 }
 
@@ -1064,15 +1056,15 @@ VkPipeline createGraphicsPipeline(VkDevice device, VkPipelineLayout pipelineLayo
     // Binding description (one vec2 per vertex)
     VkVertexInputBindingDescription bindingDescription = {};
     bindingDescription.binding = 0;
-    bindingDescription.stride = sizeof(float) * 4;
+    bindingDescription.stride = sizeof(float) * 5; // vec3 pos and vec2 uv
     bindingDescription.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
 
-    // Attribute description (vec2 -> location 0 in the shader)
+    // Attribute description (vec3 -> location 0 in the shader)
     VkVertexInputAttributeDescription attributeDescriptions[2];
     attributeDescriptions[0] = {};
     attributeDescriptions[0].binding = 0;
     attributeDescriptions[0].location = 0;
-    attributeDescriptions[0].format = VK_FORMAT_R32G32_SFLOAT;
+    attributeDescriptions[0].format = VK_FORMAT_R32G32B32_SFLOAT;
     attributeDescriptions[0].offset = 0;
 
     // Attribute description (vec2 -> location 1 in the shader)
@@ -1081,7 +1073,7 @@ VkPipeline createGraphicsPipeline(VkDevice device, VkPipelineLayout pipelineLayo
     attributeDescriptions[1].binding = 0;
     attributeDescriptions[1].location = 1;
     attributeDescriptions[1].format = VK_FORMAT_R32G32_SFLOAT;
-    attributeDescriptions[1].offset = sizeof(float) * 2;
+    attributeDescriptions[1].offset = sizeof(float) * 3;
 
     // Pipeline vertex input state
     VkPipelineVertexInputStateCreateInfo vertexInputInfo = {};
@@ -1121,7 +1113,7 @@ VkPipeline createGraphicsPipeline(VkDevice device, VkPipelineLayout pipelineLayo
     rasterizer.rasterizerDiscardEnable = VK_FALSE;
     rasterizer.polygonMode = VK_POLYGON_MODE_FILL;  // Fill the triangles
     rasterizer.lineWidth = 1.0f;
-    rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;    // Cull back faces
+    rasterizer.cullMode = VK_CULL_MODE_NONE;    // may cull backfacing faces, etc
     rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE; // Counter-clockwise vertices are front
     rasterizer.depthBiasEnable = VK_FALSE;
 
@@ -1174,14 +1166,17 @@ std::tuple<VkBuffer, VkDeviceMemory> createUniformbuffer(VkPhysicalDevice gpu, V
     VkBuffer uniformBuffer;
     VkDeviceMemory uniformBufferMemory;
 
-    float identityMatrix[]{ 1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1 };
+    Camera camera;
+    camera.perspective(0.5f*M_PI, windowWidth, windowHeight, 0.1f, 100.0f);
+    camera.moveTo(1.0f, 1.0f, -1.0f).lookAt(0.0f, 0.0f, 0.0f);
+    mat16f viewProjection = camera.getViewProjection();
 
     size_t byteCount = sizeof(float)*16; // 4x4 matrix
     std::tie(uniformBuffer, uniformBufferMemory) = createBuffer(gpu, device, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, byteCount);
 
     void* data;
     vkMapMemory(device, uniformBufferMemory, 0, byteCount, 0, &data);  // Map memory to CPU-accessible address
-    memcpy(data, identityMatrix, (size_t)byteCount);                // Copy vertex data
+    memcpy(data, viewProjection, (size_t)byteCount);                // Copy vertex data
     vkUnmapMemory(device, uniformBufferMemory);                              // Unmap memory after copying
 
     return std::make_tuple(uniformBuffer, uniformBufferMemory);
@@ -1191,18 +1186,25 @@ std::tuple<VkBuffer, VkDeviceMemory> createVertexBuffer(VkPhysicalDevice gpu, Vk
     // Vulkan clip space has -1,-1 as the upper-left corner of the display and Y increases as you go down.
     // This is similar to most window system conventions and file formats.
     float vertices[] {
-        -0.5f, -0.5f, 0.0f, 0.0f,
-        0.5f, -0.5f, 1.0f, 0.0f,
-        -0.5f, 0.5f, 0.0f, 1.0f,
-        -0.5f, 0.5f, 0.0f, 1.0f,
-        0.5f, -0.5f, 1.0f, 0.0f,
-        0.5f, 0.5f, 1.0f, 1.0f,
-    };
+        -0.5f, 0.5f, 0.0f, 0.0f, 0.0f,
+        0.5f, 0.5f, 0.0f, 1.0f, 0.0f,
+        -0.5f, -0.5f, 0.0f, 0.0f, 1.0f,
+        -0.5f, -0.5f, 0.0f, 0.0f, 1.0f,
+        0.5f, 0.5f, 0.0f, 1.0f, 0.0f,
+        0.5f, -0.5f, 0.0f, 1.0f, 1.0f,
+
+        -0.5f, 0.5f, 0.2f, 0.0f, 0.0f,
+        0.5f, 0.5f, 0.2f, 1.0f, 0.0f,
+        -0.5f, -0.5f, 0.2f, 0.0f, 1.0f,
+        -0.5f, -0.5f, 0.2f, 0.0f, 1.0f,
+        0.5f, 0.5f, 0.2f, 1.0f, 0.0f,
+        0.5f, -0.5f, 0.2f, 1.0f, 1.0f,
+    }; 
 
     VkBuffer vertexBuffer;
     VkDeviceMemory vertexBufferMemory;
 
-    size_t byteCount = sizeof(float)*4*6;
+    size_t byteCount = sizeof(vertices);
     std::tie(vertexBuffer, vertexBufferMemory) = createBuffer(gpu, device, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, byteCount);
 
     void* data;
@@ -1226,7 +1228,7 @@ VkDescriptorSetLayout createDescriptorSetLayout(VkDevice device) {
     samplerLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; // binds both VkImageView and VkSampler
     samplerLayoutBinding.descriptorCount = 1;
     samplerLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-    samplerLayoutBinding.pImmutableSamplers = nullptr; // Sampler here?
+    samplerLayoutBinding.pImmutableSamplers = nullptr; // no sampler here either?
 
     VkDescriptorSetLayoutBinding bindings[] {uboLayoutBinding, samplerLayoutBinding};
 
@@ -1429,7 +1431,7 @@ void recordRenderPass(
     VkDeviceSize offsets[] = { 0 };
     vkCmdBindVertexBuffers(commandBuffer, 0, 1, &vertexBuffer, offsets);  // Bind the vertex buffer
 
-    vkCmdDraw(commandBuffer, 6, 1, 0, 0);  // Draw 6 vertices
+    vkCmdDraw(commandBuffer, 12, 1, 0, 0);  // Draw 12 vertices (4 tris, 2 quads)
 
     vkCmdEndRenderPass(commandBuffer);
 
@@ -1494,7 +1496,7 @@ int main(int argc, char *argv[]) {
     }
 
     // Create vulkan compatible window
-    SDL_Window* window = SDL_CreateWindow(gAppName, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, gWindowWidth, gWindowHeight, SDL_WINDOW_VULKAN | SDL_WINDOW_SHOWN);
+    SDL_Window* window = SDL_CreateWindow(appName, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, windowWidth, windowHeight, SDL_WINDOW_VULKAN | SDL_WINDOW_SHOWN);
     if (window == nullptr) {
         SDL_Quit();
         return -1;
