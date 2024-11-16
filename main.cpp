@@ -23,9 +23,7 @@ VkSurfaceTransformFlagBitsKHR desiredTransform = VK_SURFACE_TRANSFORM_IDENTITY_B
 VkFormat surfaceFormat = VK_FORMAT_B8G8R8A8_SRGB;
 VkColorSpaceKHR colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
 VkImageUsageFlags desiredImageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
-VkFormat depthFormat = VK_FORMAT_D32_SFLOAT_S8_UINT;
-
-#define DEPTH_BUFFER 0
+VkFormat depthFormat = VK_FORMAT_D24_UNORM_S8_UINT; // some options are VK_FORMAT_D32_SFLOAT, VK_FORMAT_D32_SFLOAT_S8_UINT, VK_FORMAT_D24_UNORM_S8_UINT
 
 struct PipelineInfo {
     float w, h;
@@ -934,9 +932,12 @@ std::tuple<VkImageView, VkImage, VkDeviceMemory> createDepthBuffer(VkPhysicalDev
     if (vkCreateImage(device, &imageInfo, nullptr, &image) != VK_SUCCESS) {
         throw std::runtime_error("failed to create depth image");
     }
-    
-    VkImageView imageView = createImageView(device, image, depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT);
-    
+
+    VkImageAspectFlags imageAspects = VK_IMAGE_ASPECT_DEPTH_BIT;
+    if (depthFormat == VK_FORMAT_D32_SFLOAT_S8_UINT || depthFormat == VK_FORMAT_D24_UNORM_S8_UINT) {
+        imageAspects |= VK_IMAGE_ASPECT_STENCIL_BIT;
+    }
+
     VkMemoryRequirements memoryRequirements;
     vkGetImageMemoryRequirements(device, image, &memoryRequirements);
 
@@ -955,6 +956,8 @@ std::tuple<VkImageView, VkImage, VkDeviceMemory> createDepthBuffer(VkPhysicalDev
     }
 
     transitionImageLayout(device, commandPool, graphicsQueue, image, depthFormat, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+
+    VkImageView imageView = createImageView(device, image, depthFormat, imageAspects);
 
     return std::make_tuple(imageView, image, memory);
 }
@@ -1113,13 +1116,9 @@ VkRenderPass createRenderPass(VkDevice device) {
     renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
     renderPassInfo.subpassCount = 1;
     renderPassInfo.pSubpasses = &subpass;
-#if DEPTH_BUFFER
     renderPassInfo.dependencyCount = 1;
     renderPassInfo.pDependencies = &dependency;
     renderPassInfo.attachmentCount = 2;
-#else
-    renderPassInfo.attachmentCount = 1;
-#endif
     renderPassInfo.pAttachments = attachments;
 
     VkRenderPass renderPass;
@@ -1230,11 +1229,7 @@ VkPipeline createGraphicsPipeline(VkDevice device, VkPipelineLayout pipelineLayo
     depthStencil.depthWriteEnable = VK_TRUE;
     depthStencil.depthCompareOp = VK_COMPARE_OP_LESS;
     depthStencil.depthBoundsTestEnable = VK_FALSE;
-    depthStencil.minDepthBounds = 0.0f; // optional
-    depthStencil.maxDepthBounds = 1.0f; // optional
     depthStencil.stencilTestEnable = VK_FALSE;
-    depthStencil.front = {}; // optional
-    depthStencil.back = {}; // optional
 
     VkPipeline pipeline;
     VkGraphicsPipelineCreateInfo pipelineCreateInfo = {};
@@ -1251,10 +1246,8 @@ VkPipeline createGraphicsPipeline(VkDevice device, VkPipelineLayout pipelineLayo
     pipelineCreateInfo.renderPass = renderPass;  // Render pass created earlier
     pipelineCreateInfo.subpass = 0;  // Index of the subpass where this pipeline will be used
     pipelineCreateInfo.basePipelineHandle = VK_NULL_HANDLE;  // Not deriving from another pipeline
-#if DEPTH_BUFFER
     pipelineCreateInfo.pDepthStencilState = &depthStencil;
-#endif
-
+    
     if (vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineCreateInfo, nullptr, &pipeline) != VK_SUCCESS) {
         throw std::runtime_error("failed to create graphics pipeline!");
     }
