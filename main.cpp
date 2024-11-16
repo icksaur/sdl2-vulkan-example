@@ -23,6 +23,9 @@ VkSurfaceTransformFlagBitsKHR desiredTransform = VK_SURFACE_TRANSFORM_IDENTITY_B
 VkFormat surfaceFormat = VK_FORMAT_B8G8R8A8_SRGB;
 VkColorSpaceKHR colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
 VkImageUsageFlags desiredImageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+VkFormat depthFormat = VK_FORMAT_D32_SFLOAT_S8_UINT;
+
+#define DEPTH_BUFFER 0
 
 struct PipelineInfo {
     float w, h;
@@ -43,22 +46,6 @@ const std::set<std::string>& getRequestedLayerNames() {
         layers.emplace("VK_LAYER_KHRONOS_validation");
     }
     return layers;
-}
-
-const std::set<std::string>& getRequestedDeviceExtensionNames() {
-    static std::set<std::string> layers;
-    if (layers.empty()) {
-        layers.emplace(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
-    }
-    return layers;
-}
-
-const std::vector<VkImageUsageFlags> getRequestedImageUsages() {
-    static std::vector<VkImageUsageFlags> usages;
-    if (usages.empty()) {
-        usages.emplace_back(desiredImageUsage);
-    }
-    return usages;
 }
 
 template<typename T>
@@ -338,7 +325,7 @@ bool createLogicalDevice(VkPhysicalDevice& physicalDevice,
 
     // Match names against requested extension
     std::vector<const char*> device_property_names;
-    const std::set<std::string>& required_extension_names = getRequestedDeviceExtensionNames();
+    const std::set<std::string> required_extension_names{VK_KHR_SWAPCHAIN_EXTENSION_NAME};
     int count = 0;
     for (const auto& ext_property : device_properties) {
         std::cout << count << ": " << ext_property.extensionName << "\n";
@@ -611,15 +598,21 @@ struct ScopedCommandBuffer {
         }
     }
     void submitAndWait() {
-        vkEndCommandBuffer(commandBuffer);
+        if (VK_SUCCESS != vkEndCommandBuffer(commandBuffer)) {
+            throw std::runtime_error("failed to end command buffer");
+        }
 
         VkSubmitInfo submitInfo{};
         submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
         submitInfo.commandBufferCount = 1;
         submitInfo.pCommandBuffers = &commandBuffer;
 
-        vkQueueSubmit(graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
-        vkQueueWaitIdle(graphicsQueue);
+        if (VK_SUCCESS != vkQueueSubmit(graphicsQueue, 1, &submitInfo, VK_NULL_HANDLE)) {
+            throw std::runtime_error("failed submit queue");
+        }
+        if (VK_SUCCESS != vkQueueWaitIdle(graphicsQueue)) {
+            throw std::runtime_error("failed wait for queue to be idle");
+        }
     }
     ~ScopedCommandBuffer() {
         vkFreeCommandBuffers(device, commandPool, 1, &commandBuffer);
@@ -636,7 +629,13 @@ void transitionImageLayout(VkDevice device, VkCommandPool commandPool, VkQueue g
     barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     barrier.image = image;
-    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+
+    if (oldLayout == VK_IMAGE_LAYOUT_UNDEFINED && newLayout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL) {
+        barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
+    } else {
+        barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    }
+
     barrier.subresourceRange.baseMipLevel = 0;
     barrier.subresourceRange.levelCount = 1;
     barrier.subresourceRange.baseArrayLayer = 0;
@@ -657,9 +656,17 @@ void transitionImageLayout(VkDevice device, VkCommandPool commandPool, VkQueue g
 
         sourceStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
         destinationStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    } else if (oldLayout == VK_IMAGE_LAYOUT_UNDEFINED && newLayout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL) {
+        barrier.srcAccessMask = 0;
+        barrier.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+
+        sourceStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+        destinationStage = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
     } else {
         throw std::invalid_argument("unsupported layout transition!");
     }
+
+    std::cout << "transitioning image from " << oldLayout << " to " << newLayout << std::endl;
 
     vkCmdPipelineBarrier(
         scopedCommandBuffer.commandBuffer,
@@ -881,6 +888,77 @@ bool getSwapChainImageHandles(VkDevice device, VkSwapchainKHR chain, std::vector
     return true;
 }
 
+VkImageView createImageView(VkDevice device, VkImage image, VkFormat format, VkImageAspectFlags imageAspects) {
+    VkImageView textureImageView;
+    VkImageViewCreateInfo viewInfo = {};
+    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    viewInfo.image = image;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.format = format;
+    viewInfo.subresourceRange.aspectMask = imageAspects;
+    viewInfo.subresourceRange.baseMipLevel = 0;
+    viewInfo.subresourceRange.levelCount = 1;
+    viewInfo.subresourceRange.baseArrayLayer = 0;
+    viewInfo.subresourceRange.layerCount = 1;
+
+    if (vkCreateImageView(device, &viewInfo, nullptr, &textureImageView) != VK_SUCCESS) {
+        throw std::runtime_error("failed to create texture image views");
+    }
+
+    return textureImageView;
+}
+
+std::tuple<VkImageView, VkImage, VkDeviceMemory> createDepthBuffer(VkPhysicalDevice gpu, VkDevice device, VkCommandPool commandPool, VkQueue graphicsQueue) {
+    VkFormatProperties props;
+    vkGetPhysicalDeviceFormatProperties(gpu, depthFormat, &props);
+    if (0 == (props.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT)) {
+        throw std::runtime_error("requested format does not have tiling features");
+    }
+
+    VkImageCreateInfo imageInfo = {};
+    imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    imageInfo.imageType = VK_IMAGE_TYPE_2D;
+    imageInfo.extent.width = pipelineInfo.extent.width;
+    imageInfo.extent.height = pipelineInfo.extent.height;
+    imageInfo.extent.depth = 1;
+    imageInfo.mipLevels = 1;
+    imageInfo.arrayLayers = 1;
+    imageInfo.format = depthFormat;
+    imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED; // we must "transition" this image to a device-optimal format
+    imageInfo.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    VkImage image;
+    if (vkCreateImage(device, &imageInfo, nullptr, &image) != VK_SUCCESS) {
+        throw std::runtime_error("failed to create depth image");
+    }
+    
+    VkImageView imageView = createImageView(device, image, depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT);
+    
+    VkMemoryRequirements memoryRequirements;
+    vkGetImageMemoryRequirements(device, image, &memoryRequirements);
+
+    VkMemoryAllocateInfo allocateInfo = {};
+    allocateInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocateInfo.allocationSize = memoryRequirements.size;
+    allocateInfo.memoryTypeIndex = findMemoryType(gpu, memoryRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+    VkDeviceMemory memory;
+    if (VK_SUCCESS != vkAllocateMemory(device, &allocateInfo, nullptr, &memory)) {
+        throw std::runtime_error("failed to allocate depth buffer memory");
+    }
+
+    if (VK_SUCCESS != vkBindImageMemory(device, image, memory, 0)) {
+        throw std::runtime_error("failed to bind depth image memory");
+    }
+
+    transitionImageLayout(device, commandPool, graphicsQueue, image, depthFormat, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+
+    return std::make_tuple(imageView, image, memory);
+}
+
 void makeChainImageViews(VkDevice device, VkSwapchainKHR swapChain, std::vector<VkImage> & images, std::vector<VkImageView> & imageViews) {
     imageViews.resize(images.size());
     for (size_t i=0; i < images.size(); i++) {
@@ -901,26 +979,6 @@ void makeChainImageViews(VkDevice device, VkSwapchainKHR swapChain, std::vector<
             throw std::runtime_error("failed to create image views!");
         }
     }
-}
-
-VkImageView createImageView(VkDevice device, VkImage image, VkFormat format) {
-    VkImageView textureImageView;
-    VkImageViewCreateInfo viewInfo = {};
-    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-    viewInfo.image = image;
-    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    viewInfo.format = format;
-    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    viewInfo.subresourceRange.baseMipLevel = 0;
-    viewInfo.subresourceRange.levelCount = 1;
-    viewInfo.subresourceRange.baseArrayLayer = 0;
-    viewInfo.subresourceRange.layerCount = 1;
-
-    if (vkCreateImageView(device, &viewInfo, nullptr, &textureImageView) != VK_SUCCESS) {
-        throw std::runtime_error("failed to create texture image views");
-    }
-
-    return textureImageView;
 }
 
 VkSampler createSampler(VkDevice device) {
@@ -946,13 +1004,15 @@ VkSampler createSampler(VkDevice device) {
     return textureSampler;
 }
 
-void makeFramebuffers(VkDevice device, VkRenderPass renderPass, std::vector<VkImageView> & chainImageViews, std::vector<VkFramebuffer> & frameBuffers) {
+void makeFramebuffers(VkDevice device, VkRenderPass renderPass, std::vector<VkImageView> & chainImageViews, std::vector<VkFramebuffer> & frameBuffers, VkImageView depthImageView) {
     for (size_t i=0; i<chainImageViews.size(); i++) {
+        VkImageView imageViews[] { chainImageViews[i], depthImageView };
+
         VkFramebufferCreateInfo framebufferInfo = {};
         framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
         framebufferInfo.renderPass = renderPass;
-        framebufferInfo.attachmentCount = 1;  // We are using only a color attachment
-        framebufferInfo.pAttachments = &chainImageViews[i];  // Image view as color attachment
+        framebufferInfo.attachmentCount = 2;  // We are using only a color attachment
+        framebufferInfo.pAttachments = imageViews;  // Image view as color attachment
         framebufferInfo.width = pipelineInfo.extent.width;
         framebufferInfo.height = pipelineInfo.extent.height;
         framebufferInfo.layers = 1;
@@ -1018,17 +1078,49 @@ VkRenderPass createRenderPass(VkDevice device) {
     colorAttachmentRef.attachment = 0;
     colorAttachmentRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
+    VkAttachmentDescription depthAttachment{};
+    depthAttachment.format = depthFormat;
+    depthAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+    depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    depthAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    depthAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    depthAttachment.initialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL; // should already be in this format
+    depthAttachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+    VkAttachmentReference depthAttachmentRef{};
+    depthAttachmentRef.attachment = 1;
+    depthAttachmentRef.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
     VkSubpassDescription subpass = {};
     subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
     subpass.colorAttachmentCount = 1;
     subpass.pColorAttachments = &colorAttachmentRef;
 
+    subpass.pDepthStencilAttachment = &depthAttachmentRef;
+
+    VkSubpassDependency dependency = {};
+    dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+    dependency.dstSubpass = 0;
+    dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+    dependency.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+    dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
+
+    VkAttachmentDescription attachments[] { colorAttachment, depthAttachment };
+
     VkRenderPassCreateInfo renderPassInfo = {};
     renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-    renderPassInfo.attachmentCount = 1;
-    renderPassInfo.pAttachments = &colorAttachment;
     renderPassInfo.subpassCount = 1;
     renderPassInfo.pSubpasses = &subpass;
+#if DEPTH_BUFFER
+    renderPassInfo.dependencyCount = 1;
+    renderPassInfo.pDependencies = &dependency;
+    renderPassInfo.attachmentCount = 2;
+#else
+    renderPassInfo.attachmentCount = 1;
+#endif
+    renderPassInfo.pAttachments = attachments;
 
     VkRenderPass renderPass;
     if (vkCreateRenderPass(device, &renderPassInfo, nullptr, &renderPass) != VK_SUCCESS) {
@@ -1132,6 +1224,18 @@ VkPipeline createGraphicsPipeline(VkDevice device, VkPipelineLayout pipelineLayo
     multisampling.sampleShadingEnable = VK_FALSE;
     multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
 
+    VkPipelineDepthStencilStateCreateInfo depthStencil = {};
+    depthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    depthStencil.depthTestEnable = VK_TRUE;
+    depthStencil.depthWriteEnable = VK_TRUE;
+    depthStencil.depthCompareOp = VK_COMPARE_OP_LESS;
+    depthStencil.depthBoundsTestEnable = VK_FALSE;
+    depthStencil.minDepthBounds = 0.0f; // optional
+    depthStencil.maxDepthBounds = 1.0f; // optional
+    depthStencil.stencilTestEnable = VK_FALSE;
+    depthStencil.front = {}; // optional
+    depthStencil.back = {}; // optional
+
     VkPipeline pipeline;
     VkGraphicsPipelineCreateInfo pipelineCreateInfo = {};
     pipelineCreateInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
@@ -1147,6 +1251,9 @@ VkPipeline createGraphicsPipeline(VkDevice device, VkPipelineLayout pipelineLayo
     pipelineCreateInfo.renderPass = renderPass;  // Render pass created earlier
     pipelineCreateInfo.subpass = 0;  // Index of the subpass where this pipeline will be used
     pipelineCreateInfo.basePipelineHandle = VK_NULL_HANDLE;  // Not deriving from another pipeline
+#if DEPTH_BUFFER
+    pipelineCreateInfo.pDepthStencilState = &depthStencil;
+#endif
 
     if (vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipelineCreateInfo, nullptr, &pipeline) != VK_SUCCESS) {
         throw std::runtime_error("failed to create graphics pipeline!");
@@ -1462,7 +1569,8 @@ void submitCommandBuffer(VkQueue graphicsQueue, VkCommandBuffer commandBuffer, V
         throw std::runtime_error("failed to submit command buffer!");
     }
 
-    if (vkQueueWaitIdle(graphicsQueue) != VK_SUCCESS) {
+    VkResult result = vkQueueWaitIdle(graphicsQueue);
+    if (VK_SUCCESS != result) {
         throw std::runtime_error("failed to wait for the graphics queue to be idle");
     }
 }
@@ -1565,7 +1673,7 @@ int main(int argc, char *argv[]) {
 
     VkCommandPool commandPool = createCommandPool(device, graphicsQueueIndex);
 
-    // shader objects, to be 
+    // shader objects
     VkShaderModule vertShader = loadShaderModule(device, "tri.vert.spv");
     VkShaderModule fragShader = loadShaderModule(device, "tri.frag.spv");
 
@@ -1575,7 +1683,7 @@ int main(int argc, char *argv[]) {
     VkFormat textureImageFormat;
     std::tie(textureImage, textureImageMemory, textureImageFormat) = createImageFromTGAFile("vulkan.tga", gpu, device, commandPool, graphicsQueue);
 
-    VkImageView textureImageView = createImageView(device, textureImage, textureImageFormat);
+    VkImageView textureImageView = createImageView(device, textureImage, textureImageFormat, VK_IMAGE_ASPECT_COLOR_BIT);
     VkSampler textureSampler = createSampler(device);
 
     // uniform buffer for our view projection matrix
@@ -1604,9 +1712,15 @@ int main(int argc, char *argv[]) {
 
     VkRenderPass renderPass = createRenderPass(device);
 
+    // depth buffer
+    VkImageView depthImageView;
+    VkImage depthImage;
+    VkDeviceMemory depthMemory;
+    std::tie(depthImageView, depthImage, depthMemory) = createDepthBuffer(gpu, device, commandPool, graphicsQueue);
+
     // buffers to render to for presenting
     std::vector<VkFramebuffer> frameBuffers(chainImages.size());
-    makeFramebuffers(device, renderPass, chainImageViews, frameBuffers);
+    makeFramebuffers(device, renderPass, chainImageViews, frameBuffers, depthImageView);
 
     VkPipeline pipeline = createGraphicsPipeline(device, pipelineLayout, renderPass, vertShader, fragShader);
 
@@ -1660,6 +1774,12 @@ int main(int argc, char *argv[]) {
             }
             vkDestroySwapchainKHR(device, swapchain, nullptr);
 
+            vkDestroyImageView(device, depthImageView, nullptr);
+            vkDestroyImage(device, depthImage, nullptr);
+            vkFreeMemory(device, depthMemory, nullptr);
+
+            std::tie(depthImageView, depthImage, depthMemory) = createDepthBuffer(gpu, device, commandPool, graphicsQueue);
+
             swapchain = VK_NULL_HANDLE;
             if (!createSwapChain(presentation_surface, gpu, device, swapchain)) {
                 throw std::runtime_error("failed to recreate swap chain");
@@ -1668,7 +1788,7 @@ int main(int argc, char *argv[]) {
                 throw std::runtime_error("failed to re-obtain swap chain images");
             }
             makeChainImageViews(device, swapchain, chainImages, chainImageViews);
-            makeFramebuffers(device, renderPass, chainImageViews, frameBuffers);
+            makeFramebuffers(device, renderPass, chainImageViews, frameBuffers, depthImageView);
         }
         SDL_Delay(100);
         
@@ -1696,6 +1816,10 @@ int main(int argc, char *argv[]) {
     vkDestroyImageView(device, textureImageView, nullptr);
     vkDestroyImage(device, textureImage, nullptr);
     vkFreeMemory(device, textureImageMemory,  nullptr);
+
+    vkDestroyImageView(device, depthImageView, nullptr);
+    vkDestroyImage(device, depthImage, nullptr);
+    vkFreeMemory(device, depthMemory, nullptr);
 
     vkDestroySemaphore(device, imageAvailableSemaphore, nullptr);
     vkDestroySemaphore(device, renderFinishedSemaphore, nullptr);
