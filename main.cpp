@@ -18,7 +18,7 @@ const char * appName = "VulkanTest";
 const char * engineName = "VulkanTestEngine";
 int windowWidth = 1280;
 int windowHeight = 720;
-VkPresentModeKHR presentationMode = VK_PRESENT_MODE_FIFO_RELAXED_KHR;
+VkPresentModeKHR preferredPresentationMode = VK_PRESENT_MODE_FIFO_RELAXED_KHR;
 VkSurfaceTransformFlagBitsKHR desiredTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
 VkFormat surfaceFormat = VK_FORMAT_B8G8R8A8_SRGB;
 VkColorSpaceKHR colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
@@ -399,26 +399,27 @@ bool createSurface(SDL_Window* window, VkInstance instance, VkPhysicalDevice gpu
 }
 
 bool getPresentationMode(VkSurfaceKHR surface, VkPhysicalDevice device, VkPresentModeKHR& ioMode) {
-    uint32_t mode_count(0);
-    if(vkGetPhysicalDeviceSurfacePresentModesKHR(device, surface, &mode_count, NULL) != VK_SUCCESS) {
+    uint32_t modeCount = 0;
+    if(vkGetPhysicalDeviceSurfacePresentModesKHR(device, surface, &modeCount, NULL) != VK_SUCCESS) {
         std::cout << "unable to query present mode count for physical device\n";
         return false;
     }
 
-    std::vector<VkPresentModeKHR> available_modes(mode_count);
-    if (vkGetPhysicalDeviceSurfacePresentModesKHR(device, surface, &mode_count, available_modes.data()) != VK_SUCCESS) {
+    std::vector<VkPresentModeKHR> availableModes(modeCount);
+    if (vkGetPhysicalDeviceSurfacePresentModesKHR(device, surface, &modeCount, availableModes.data()) != VK_SUCCESS) {
         std::cout << "unable to query the various present modes for physical device\n";
         return false;
     }
 
-    for (auto& mode : available_modes) {
-        if (mode == ioMode)
+    for (auto& mode : availableModes) {
+        if (mode == ioMode) {
             return true;
+        }
     }
     std::cout << "unable to obtain preferred display mode, fallback to FIFO\n";
 
     std::cout << "available present modes: " << std::endl;
-    for (auto & mode : available_modes) {
+    for (auto & mode : availableModes) {
         std::cout << "    "  << mode << std::endl;
     }
 
@@ -617,7 +618,7 @@ struct ScopedCommandBuffer {
     }
 };
 
-void transitionImageLayout(VkDevice device, VkCommandPool commandPool, VkQueue graphicsQueue, VkImage image, VkFormat format, VkImageLayout oldLayout, VkImageLayout newLayout) {
+void transitionImageLayout(VkDevice device, VkCommandPool commandPool, VkQueue graphicsQueue, VkImage image, VkFormat format, size_t mipLevels, VkImageLayout oldLayout, VkImageLayout newLayout) {
     ScopedCommandBuffer scopedCommandBuffer(device, commandPool, graphicsQueue);
 
     VkImageMemoryBarrier barrier = {};
@@ -635,7 +636,7 @@ void transitionImageLayout(VkDevice device, VkCommandPool commandPool, VkQueue g
     }
 
     barrier.subresourceRange.baseMipLevel = 0;
-    barrier.subresourceRange.levelCount = 1;
+    barrier.subresourceRange.levelCount = mipLevels;
     barrier.subresourceRange.baseArrayLayer = 0;
     barrier.subresourceRange.layerCount = 1;
 
@@ -703,7 +704,109 @@ void copyBufferToImage(VkDevice device, VkCommandPool commandPool, VkQueue graph
     scopedCommandBuffer.submitAndWait();
 }
 
-std::tuple<VkImage, VkDeviceMemory, VkFormat> createImageFromTGAFile(const char * filename, VkPhysicalDevice gpu, VkDevice device, VkCommandPool commandPool, VkQueue graphicsQueue) {
+VkImageView createImageView(VkDevice device, VkImage image, VkFormat format, VkImageAspectFlags imageAspects, size_t mipLevelCount) {
+    VkImageView textureImageView;
+    VkImageViewCreateInfo viewInfo = {};
+    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    viewInfo.image = image;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.format = format;
+    viewInfo.subresourceRange.aspectMask = imageAspects;
+    viewInfo.subresourceRange.baseMipLevel = 0;
+    viewInfo.subresourceRange.levelCount = mipLevelCount;
+    viewInfo.subresourceRange.baseArrayLayer = 0;
+    viewInfo.subresourceRange.layerCount = 1;
+
+    if (vkCreateImageView(device, &viewInfo, nullptr, &textureImageView) != VK_SUCCESS) {
+        throw std::runtime_error("failed to create texture image views");
+    }
+
+    return textureImageView;
+}
+
+void generateMipmaps(VkDevice device, VkImage image, VkCommandPool commandPool, VkQueue graphicsQueue, int width, int height, size_t mipLevelCount) {
+    VkImageMemoryBarrier writeToReadBarrier = {};
+    writeToReadBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    writeToReadBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    writeToReadBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    writeToReadBarrier.image = image;
+    writeToReadBarrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    writeToReadBarrier.subresourceRange.baseArrayLayer = 0;
+    writeToReadBarrier.subresourceRange.layerCount = 1;
+    writeToReadBarrier.subresourceRange.levelCount = 1;
+    writeToReadBarrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    writeToReadBarrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    writeToReadBarrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    writeToReadBarrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+
+    VkImageMemoryBarrier readToSampleBarrier = writeToReadBarrier;
+    readToSampleBarrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    readToSampleBarrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    readToSampleBarrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    readToSampleBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+    VkImageBlit blit{}; // blit configuration shared for all mip levels
+    blit.srcOffsets[0] = { 0, 0, 0 };
+    blit.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    blit.srcSubresource.baseArrayLayer = 0;
+    blit.srcSubresource.layerCount = 1;
+    blit.dstOffsets[0] = { 0, 0, 0 };
+    blit.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    blit.dstSubresource.baseArrayLayer = 0;
+    blit.dstSubresource.layerCount = 1;
+
+    ScopedCommandBuffer scopedCommandBuffer(device, commandPool, graphicsQueue);
+
+    int mipWidth = width;
+    int mipHeight = height;
+    
+    for (size_t i=1; i<mipLevelCount; i++) {
+        writeToReadBarrier.subresourceRange.baseMipLevel = i - 1;
+        readToSampleBarrier.subresourceRange.baseMipLevel = i - 1;
+
+        blit.srcOffsets[1] = { mipWidth, mipHeight, 1 };
+        blit.srcSubresource.mipLevel = i - 1;
+        blit.dstOffsets[1] = { mipWidth > 1 ? mipWidth / 2 : 1, mipHeight > 1 ? mipHeight / 2 : 1, 1 };
+        blit.dstSubresource.mipLevel = i;
+
+        vkCmdPipelineBarrier(scopedCommandBuffer.commandBuffer,
+            VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
+            0, nullptr,
+            0, nullptr,
+            1, &writeToReadBarrier);
+        
+        vkCmdBlitImage(scopedCommandBuffer.commandBuffer,
+            image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            1, &blit,
+            VK_FILTER_LINEAR);
+
+        vkCmdPipelineBarrier(scopedCommandBuffer.commandBuffer,
+            VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
+            0, nullptr,
+            0, nullptr,
+            1, &readToSampleBarrier);
+        
+        if (mipWidth > 1) mipWidth /= 2;
+        if (mipHeight > 1) mipHeight /= 2;
+    }
+
+    // transition the final mip to shader read
+    VkImageMemoryBarrier writeToSampleBarrier = readToSampleBarrier;
+    writeToSampleBarrier.subresourceRange.baseMipLevel = mipLevelCount - 1;
+    writeToSampleBarrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    writeToSampleBarrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+
+    vkCmdPipelineBarrier(scopedCommandBuffer.commandBuffer,
+        VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
+        0, nullptr,
+        0, nullptr,
+        1, &writeToSampleBarrier);
+
+    scopedCommandBuffer.submitAndWait();
+}
+
+std::tuple<VkImage, VkDeviceMemory, VkImageView> createImageFromTGAFile(const char * filename, VkPhysicalDevice gpu, VkDevice device, VkCommandPool commandPool, VkQueue graphicsQueue) {
     VkImage image;
     VkDeviceMemory memory;
 
@@ -737,18 +840,24 @@ std::tuple<VkImage, VkDeviceMemory, VkFormat> createImageFromTGAFile(const char 
     vkUnmapMemory(device, stagingMemory);
     free(tgaBytes);
 
+    size_t mipLevels = std::floor(log2(std::max(width, height))) + 1;
+
     VkImageCreateInfo imageInfo = {};
     imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
     imageInfo.imageType = VK_IMAGE_TYPE_2D;
     imageInfo.extent.width = width;
     imageInfo.extent.height = height;
     imageInfo.extent.depth = 1;
-    imageInfo.mipLevels = 1;
+    imageInfo.mipLevels = mipLevels;
     imageInfo.arrayLayers = 1;
     imageInfo.format = format;
     imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
     imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED; // we must "transition" this image to a device-optimal format
-    imageInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT; // copying bytes to this image, and later sampling from it
+
+    imageInfo.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT // copy bytes from image into mip levels
+        | VK_IMAGE_USAGE_TRANSFER_DST_BIT // copy bytes into image
+        | VK_IMAGE_USAGE_SAMPLED_BIT; // read by sampler in shader
+
     imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
     imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
@@ -770,18 +879,22 @@ std::tuple<VkImage, VkDeviceMemory, VkFormat> createImageFromTGAFile(const char 
     vkBindImageMemory(device, image, memory, 0);
 
     // Vulkan spec says images MUST be created either undefined or preinitialized layout, so we can't jump straight to DST_OPTIMAL.
-    transitionImageLayout(device, commandPool, graphicsQueue, image, format, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    transitionImageLayout(device, commandPool, graphicsQueue, image, format, 1, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
 
     // Now the image is in DST_OPTIMAL layout and we can copy the image data to it.
     copyBufferToImage(device, commandPool, graphicsQueue, stagingBuffer, image, width, height);
 
+    generateMipmaps(device, image, commandPool, graphicsQueue, width, height, mipLevels);
+
     // Transition to the final 2D image layout that allows us to sample in a shader.
-    transitionImageLayout(device, commandPool, graphicsQueue, image, format, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    transitionImageLayout(device, commandPool, graphicsQueue, image, format, 1, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
     vkFreeMemory(device, stagingMemory, nullptr);
     vkDestroyBuffer(device, stagingBuffer, nullptr);
 
-    return std::make_tuple(image, memory, format);
+    VkImageView imageView = createImageView(device, image, format, VK_IMAGE_ASPECT_COLOR_BIT, mipLevels);
+
+    return std::make_tuple(image, memory, imageView);
 }
 
 bool createSwapChain(VkSurfaceKHR surface, VkPhysicalDevice physicalDevice, VkDevice device, VkSwapchainKHR& outSwapChain) {
@@ -794,7 +907,7 @@ bool createSwapChain(VkSurfaceKHR surface, VkPhysicalDevice physicalDevice, VkDe
     }
 
     // Get the image presentation mode (synced, immediate etc.)
-    VkPresentModeKHR presentation_mode = presentationMode;
+    VkPresentModeKHR presentation_mode = preferredPresentationMode;
     if (!getPresentationMode(surface, physicalDevice, presentation_mode)) {
         return false;
     }
@@ -886,26 +999,6 @@ bool getSwapChainImageHandles(VkDevice device, VkSwapchainKHR chain, std::vector
     return true;
 }
 
-VkImageView createImageView(VkDevice device, VkImage image, VkFormat format, VkImageAspectFlags imageAspects) {
-    VkImageView textureImageView;
-    VkImageViewCreateInfo viewInfo = {};
-    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-    viewInfo.image = image;
-    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    viewInfo.format = format;
-    viewInfo.subresourceRange.aspectMask = imageAspects;
-    viewInfo.subresourceRange.baseMipLevel = 0;
-    viewInfo.subresourceRange.levelCount = 1;
-    viewInfo.subresourceRange.baseArrayLayer = 0;
-    viewInfo.subresourceRange.layerCount = 1;
-
-    if (vkCreateImageView(device, &viewInfo, nullptr, &textureImageView) != VK_SUCCESS) {
-        throw std::runtime_error("failed to create texture image views");
-    }
-
-    return textureImageView;
-}
-
 std::tuple<VkImageView, VkImage, VkDeviceMemory> createDepthBuffer(VkPhysicalDevice gpu, VkDevice device, VkCommandPool commandPool, VkQueue graphicsQueue) {
     VkFormatProperties props;
     vkGetPhysicalDeviceFormatProperties(gpu, depthFormat, &props);
@@ -913,13 +1006,15 @@ std::tuple<VkImageView, VkImage, VkDeviceMemory> createDepthBuffer(VkPhysicalDev
         throw std::runtime_error("requested format does not have tiling features");
     }
 
+    const size_t oneMipLevel = 1;
+
     VkImageCreateInfo imageInfo = {};
     imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
     imageInfo.imageType = VK_IMAGE_TYPE_2D;
     imageInfo.extent.width = pipelineInfo.extent.width;
     imageInfo.extent.height = pipelineInfo.extent.height;
     imageInfo.extent.depth = 1;
-    imageInfo.mipLevels = 1;
+    imageInfo.mipLevels = oneMipLevel;
     imageInfo.arrayLayers = 1;
     imageInfo.format = depthFormat;
     imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
@@ -954,10 +1049,11 @@ std::tuple<VkImageView, VkImage, VkDeviceMemory> createDepthBuffer(VkPhysicalDev
     if (VK_SUCCESS != vkBindImageMemory(device, image, memory, 0)) {
         throw std::runtime_error("failed to bind depth image memory");
     }
+    
+    // image view must be after binding image memory.  Moving this above bind will not cause a validation failure, but will fail to await the queue later.
+    VkImageView imageView = createImageView(device, image, depthFormat, imageAspects, oneMipLevel);
 
-    transitionImageLayout(device, commandPool, graphicsQueue, image, depthFormat, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
-
-    VkImageView imageView = createImageView(device, image, depthFormat, imageAspects);
+    transitionImageLayout(device, commandPool, graphicsQueue, image, depthFormat, oneMipLevel, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
 
     return std::make_tuple(imageView, image, memory);
 }
@@ -999,6 +1095,8 @@ VkSampler createSampler(VkDevice device) {
     samplerInfo.unnormalizedCoordinates = VK_FALSE;
     samplerInfo.compareEnable = VK_FALSE;
     samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    samplerInfo.minLod = 0.0f; // we can sample at higher mip levels but the use cases are uncommon
+    samplerInfo.maxLod = 13.0f; // 4k textures will have no more than 13 mip levels, so this is plenty
 
     if (vkCreateSampler(device, &samplerInfo, nullptr, &textureSampler) != VK_SUCCESS) {
         throw std::runtime_error("failed to create texture sampler");
@@ -1268,7 +1366,7 @@ std::tuple<VkBuffer, VkDeviceMemory> createUniformbuffer(VkPhysicalDevice gpu, V
 
     Camera camera;
     camera.perspective(0.5f*M_PI, windowWidth, windowHeight, 0.1f, 100.0f);
-    camera.moveTo(1.0f, 1.0f, -1.0f).lookAt(0.0f, 0.0f, 0.0f);
+    camera.moveTo(1.0f, 0.0f, -0.1f).lookAt(0.0f, 0.0f, 0.0f);
     mat16f viewProjection = camera.getViewProjection();
 
     size_t byteCount = sizeof(float)*16; // 4x4 matrix
@@ -1673,10 +1771,9 @@ int main(int argc, char *argv[]) {
     // image for sampling
     VkDeviceMemory textureImageMemory;
     VkImage textureImage;
-    VkFormat textureImageFormat;
-    std::tie(textureImage, textureImageMemory, textureImageFormat) = createImageFromTGAFile("vulkan.tga", gpu, device, commandPool, graphicsQueue);
+    VkImageView textureImageView;
+    std::tie(textureImage, textureImageMemory, textureImageView) = createImageFromTGAFile("vulkan.tga", gpu, device, commandPool, graphicsQueue);
 
-    VkImageView textureImageView = createImageView(device, textureImage, textureImageFormat, VK_IMAGE_ASPECT_COLOR_BIT);
     VkSampler textureSampler = createSampler(device);
 
     // uniform buffer for our view projection matrix
