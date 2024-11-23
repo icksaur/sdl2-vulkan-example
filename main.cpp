@@ -105,19 +105,17 @@ void destroyDebugReportCallbackEXT(VkInstance instance, VkDebugReportCallbackEXT
 void getAvailableVulkanLayers(std::vector<std::string>& outLayers) {
     // Figure out the amount of available layers
     // Layers are used for debugging / validation etc / profiling..
-    unsigned int instance_layer_count = 0;
-    if (VK_SUCCESS != vkEnumerateInstanceLayerProperties(&instance_layer_count, NULL)) {
+    unsigned int instanceLayerCount = 0;
+    if (VK_SUCCESS != vkEnumerateInstanceLayerProperties(&instanceLayerCount, NULL)) {
         throw std::runtime_error("unable to query vulkan instance layer property count");
     }
 
-    std::vector<VkLayerProperties> instance_layer_names(instance_layer_count);
-    if (VK_SUCCESS != vkEnumerateInstanceLayerProperties(&instance_layer_count, instance_layer_names.data())) {
+    std::vector<VkLayerProperties> instance_layer_names(instanceLayerCount);
+    if (VK_SUCCESS != vkEnumerateInstanceLayerProperties(&instanceLayerCount, instance_layer_names.data())) {
         throw std::runtime_error("unable to retrieve vulkan instance layer names");
     }
 
-    // Display layer names and find the ones we specified above
-    std::cout << "found " << instance_layer_count << " instance layers:\n";
-    std::vector<const char*> valid_instance_layer_names;
+    std::cout << "found " << instanceLayerCount << " instance layers:\n";
 
     std::set<std::string> requestedLayers({"VK_LAYER_KHRONOS_validation"});
 
@@ -133,27 +131,28 @@ void getAvailableVulkanLayers(std::vector<std::string>& outLayers) {
 
     // Print the ones we're enabling
     std::cout << std::endl;
-    for (const auto& layer : outLayers)
+    for (const auto& layer : outLayers) {
         std::cout << "applying layer: " << layer.c_str() << std::endl;
+    }
 }
 
 
 void getAvailableVulkanExtensions(SDL_Window* window, std::vector<std::string>& outExtensions) {
     // Figure out the amount of extensions vulkan needs to interface with the os windowing system
     // This is necessary because vulkan is a platform agnostic API and needs to know how to interface with the windowing system
-    unsigned int ext_count = 0;
-    if (SDL_TRUE != SDL_Vulkan_GetInstanceExtensions(window, &ext_count, nullptr)) {
+    unsigned int extensionCount = 0;
+    if (SDL_TRUE != SDL_Vulkan_GetInstanceExtensions(window, &extensionCount, nullptr)) {
         throw std::runtime_error("Unable to query the number of Vulkan instance extensions");
     }
 
     // Use the amount of extensions queried before to retrieve the names of the extensions
-    std::vector<const char*> ext_names(ext_count);
-    if (SDL_TRUE != SDL_Vulkan_GetInstanceExtensions(window, &ext_count, ext_names.data())) {
+    std::vector<const char*> ext_names(extensionCount);
+    if (SDL_TRUE != SDL_Vulkan_GetInstanceExtensions(window, &extensionCount, ext_names.data())) {
         throw std::runtime_error("Unable to query the number of Vulkan instance extension names");
     }
 
-    std::cout << "found " << ext_count << " Vulkan instance extensions:\n";
-    for (unsigned int i = 0; i < ext_count; i++) {
+    std::cout << "found " << extensionCount << " Vulkan instance extensions:\n";
+    for (unsigned int i = 0; i < extensionCount; i++) {
         std::cout << i << ": " << ext_names[i] << std::endl;
         outExtensions.emplace_back(ext_names[i]);
     }
@@ -163,45 +162,45 @@ void getAvailableVulkanExtensions(SDL_Window* window, std::vector<std::string>& 
     std::cout << std::endl;
 }
 
-void createVulkanInstance(const std::vector<std::string>& layerNames, const std::vector<std::string>& extensionNames, VkInstance& outInstance) {
+void createVulkanInstance(const std::vector<std::string>& layerNameStrings, const std::vector<std::string>& extensionNameStrings, VkInstance& outInstance) {
     // Copy layers
-    std::vector<const char*> layer_names;
-    for (const auto& layer : layerNames)
-        layer_names.emplace_back(layer.c_str());
+    std::vector<const char*> layerNames;
+    for (const auto& layer : layerNameStrings)
+        layerNames.emplace_back(layer.c_str());
 
     // Copy extensions
-    std::vector<const char*> ext_names;
-    for (const auto& ext : extensionNames)
-        ext_names.emplace_back(ext.c_str());
+    std::vector<const char*> extensionNames;
+    for (const auto& ext : extensionNameStrings)
+        extensionNames.emplace_back(ext.c_str());
 
     // Get the suppoerted vulkan instance version
     unsigned int api_version;
     vkEnumerateInstanceVersion(&api_version);
 
     // initialize the VkApplicationInfo structure
-    VkApplicationInfo app_info = {};
-    app_info.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
-    app_info.pNext = NULL;
-    app_info.pApplicationName = appName;
-    app_info.applicationVersion = 1;
-    app_info.pEngineName = engineName;
-    app_info.engineVersion = 1;
-    app_info.apiVersion = VK_API_VERSION_1_0;
+    VkApplicationInfo appInfo = {};
+    appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
+    appInfo.pNext = NULL;
+    appInfo.pApplicationName = appName;
+    appInfo.applicationVersion = 1;
+    appInfo.pEngineName = engineName;
+    appInfo.engineVersion = 1;
+    appInfo.apiVersion = VK_API_VERSION_1_0;
 
     // initialize the VkInstanceCreateInfo structure
-    VkInstanceCreateInfo inst_info = {};
-    inst_info.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
-    inst_info.pNext = NULL;
-    inst_info.flags = 0;
-    inst_info.pApplicationInfo = &app_info;
-    inst_info.enabledExtensionCount = static_cast<uint32_t>(ext_names.size());
-    inst_info.ppEnabledExtensionNames = ext_names.data();
-    inst_info.enabledLayerCount = static_cast<uint32_t>(layer_names.size());
-    inst_info.ppEnabledLayerNames = layer_names.data();
+    VkInstanceCreateInfo instanceInfo = {};
+    instanceInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+    instanceInfo.pNext = NULL;
+    instanceInfo.flags = 0;
+    instanceInfo.pApplicationInfo = &appInfo;
+    instanceInfo.enabledExtensionCount = static_cast<uint32_t>(extensionNames.size());
+    instanceInfo.ppEnabledExtensionNames = extensionNames.data();
+    instanceInfo.enabledLayerCount = static_cast<uint32_t>(layerNames.size());
+    instanceInfo.ppEnabledLayerNames = layerNames.data();
 
     // Create vulkan runtime instance
     std::cout << "initializing Vulkan instance\n\n";
-    VkResult res = vkCreateInstance(&inst_info, NULL, &outInstance);
+    VkResult res = vkCreateInstance(&instanceInfo, NULL, &outInstance);
 
     if (VK_SUCCESS == res) {
         return;
@@ -259,15 +258,15 @@ void selectGPU(VkInstance instance, VkPhysicalDevice& outDevice, unsigned int& o
     }
 
     // Extract the properties of all the queue families
-    std::vector<VkQueueFamilyProperties> queue_properties(familyQueueCount);
-    vkGetPhysicalDeviceQueueFamilyProperties(selectedDevice, &familyQueueCount, queue_properties.data());
+    std::vector<VkQueueFamilyProperties> queueProperties(familyQueueCount);
+    vkGetPhysicalDeviceQueueFamilyProperties(selectedDevice, &familyQueueCount, queueProperties.data());
 
     // Make sure the family of commands contains an option to issue graphical commands.
     int queueNodeIndex = -1;
     for (unsigned int i = 0; i < familyQueueCount; i++) {
-        if (queue_properties[i].queueCount > 0
-        && (queue_properties[i].queueFlags & VK_QUEUE_GRAPHICS_BIT)
-        && (queue_properties[i].queueFlags & VK_QUEUE_COMPUTE_BIT)) {
+        if (queueProperties[i].queueCount > 0
+        && (queueProperties[i].queueFlags & VK_QUEUE_GRAPHICS_BIT)
+        && (queueProperties[i].queueFlags & VK_QUEUE_COMPUTE_BIT)) {
             queueNodeIndex = i;
             break;
         }
@@ -282,103 +281,97 @@ void selectGPU(VkInstance instance, VkPhysicalDevice& outDevice, unsigned int& o
     outQueueFamilyIndex = queueNodeIndex;
 }
 
-bool createLogicalDevice(VkPhysicalDevice& physicalDevice,
-    unsigned int queueFamilyIndex,
-    const std::vector<std::string>& layerNames,
-    VkDevice& outDevice)
-{
+VkDevice createLogicalDevice(VkPhysicalDevice& physicalDevice, unsigned int queueFamilyIndex, const std::vector<std::string>& layerNameStrings) {
     // Copy layer names
-    std::vector<const char*> layer_names;
-    for (const auto& layer : layerNames) {
-        layer_names.emplace_back(layer.c_str());
+    std::vector<const char*> layerNames;
+    for (const auto& layer : layerNameStrings) {
+        layerNames.emplace_back(layer.c_str());
     }
     
     // Get the number of available extensions for our graphics card
-    uint32_t device_property_count(0);
-    if (VK_SUCCESS != vkEnumerateDeviceExtensionProperties(physicalDevice, NULL, &device_property_count, NULL)) {
+    uint32_t devicePropertyCount(0);
+    if (VK_SUCCESS != vkEnumerateDeviceExtensionProperties(physicalDevice, NULL, &devicePropertyCount, NULL)) {
         throw std::runtime_error("Unable to acquire device extension property count");
     }
-    std::cout << "\nfound " << device_property_count << " device extensions\n";
+    std::cout << "\nfound " << devicePropertyCount << " device extensions\n";
 
     // Acquire their actual names
-    std::vector<VkExtensionProperties> device_properties(device_property_count);
-    if (VK_SUCCESS != vkEnumerateDeviceExtensionProperties(physicalDevice, NULL, &device_property_count, device_properties.data())) {
+    std::vector<VkExtensionProperties> extensionProperties(devicePropertyCount);
+    if (VK_SUCCESS != vkEnumerateDeviceExtensionProperties(physicalDevice, NULL, &devicePropertyCount, extensionProperties.data())) {
         throw std::runtime_error("Unable to acquire device extension property names");
     }
 
     // Match names against requested extension
-    std::vector<const char*> device_property_names;
-    const std::set<std::string> required_extension_names{VK_KHR_SWAPCHAIN_EXTENSION_NAME};
+    std::vector<const char*> devicePropertyNames;
+    const std::set<std::string> requiredExtensionNames{VK_KHR_SWAPCHAIN_EXTENSION_NAME};
     int count = 0;
-    for (const auto& ext_property : device_properties) {
-        std::cout << count << ": " << ext_property.extensionName << std::endl;
-        auto it = required_extension_names.find(std::string(ext_property.extensionName));
-        if (it != required_extension_names.end()) {
-            device_property_names.emplace_back(ext_property.extensionName);
+    for (const auto& extensionProperty : extensionProperties) {
+        std::cout << count << ": " << extensionProperty.extensionName << std::endl;
+        auto it = requiredExtensionNames.find(std::string(extensionProperty.extensionName));
+        if (it != requiredExtensionNames.end()) {
+            devicePropertyNames.emplace_back(extensionProperty.extensionName);
         }
         count++;
     }
 
     // Warn if not all required extensions were found
-    if (required_extension_names.size() != device_property_names.size()) {
+    if (requiredExtensionNames.size() != devicePropertyNames.size()) {
         throw std::runtime_error("not all required device extensions are supported!");
     }
 
     std::cout << std::endl;
-    for (const auto& name : device_property_names) {
+    for (const auto& name : devicePropertyNames) {
         std::cout << "applying device extension: " << name << std::endl;
     }
 
     // Create queue information structure used by device based on the previously fetched queue information from the physical device
     // We create one command processing queue for graphics
-    VkDeviceQueueCreateInfo queue_create_info;
-    queue_create_info.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
-    queue_create_info.queueFamilyIndex = queueFamilyIndex;
-    queue_create_info.queueCount = 1;
+    VkDeviceQueueCreateInfo queueCreateInfo;
+    queueCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+    queueCreateInfo.queueFamilyIndex = queueFamilyIndex;
+    queueCreateInfo.queueCount = 1;
     std::vector<float> queue_prio = { 1.0f };
-    queue_create_info.pQueuePriorities = queue_prio.data();
-    queue_create_info.pNext = NULL;
-    queue_create_info.flags = 0;
+    queueCreateInfo.pQueuePriorities = queue_prio.data();
+    queueCreateInfo.pNext = NULL;
+    queueCreateInfo.flags = 0;
 
     // Device creation information
-    VkDeviceCreateInfo create_info;
-    create_info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
-    create_info.queueCreateInfoCount = 1;
-    create_info.pQueueCreateInfos = &queue_create_info;
-    create_info.ppEnabledLayerNames = layer_names.data();
-    create_info.enabledLayerCount = static_cast<uint32_t>(layer_names.size());
-    create_info.ppEnabledExtensionNames = device_property_names.data();
-    create_info.enabledExtensionCount = static_cast<uint32_t>(device_property_names.size());
-    create_info.pNext = NULL;
-    create_info.pEnabledFeatures = NULL;
-    create_info.flags = 0;
+    VkDeviceCreateInfo deviceCreateInfo;
+    deviceCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+    deviceCreateInfo.queueCreateInfoCount = 1;
+    deviceCreateInfo.pQueueCreateInfos = &queueCreateInfo;
+    deviceCreateInfo.ppEnabledLayerNames = layerNames.data();
+    deviceCreateInfo.enabledLayerCount = static_cast<uint32_t>(layerNames.size());
+    deviceCreateInfo.ppEnabledExtensionNames = devicePropertyNames.data();
+    deviceCreateInfo.enabledExtensionCount = static_cast<uint32_t>(devicePropertyNames.size());
+    deviceCreateInfo.pNext = NULL;
+    deviceCreateInfo.pEnabledFeatures = NULL;
+    deviceCreateInfo.flags = 0;
 
     // Finally we're ready to create a new device
-    if (VK_SUCCESS != vkCreateDevice(physicalDevice, &create_info, nullptr, &outDevice)) {
+    VkDevice device;
+    if (VK_SUCCESS != vkCreateDevice(physicalDevice, &deviceCreateInfo, nullptr, &device)) {
         throw std::runtime_error("failed to create logical device!");
     }
-    return true;
+
+    return device;
 }
 
 void getDeviceQueue(VkDevice device, int familyQueueIndex, VkQueue& outGraphicsQueue) {
     vkGetDeviceQueue(device, familyQueueIndex, 0, &outGraphicsQueue);
 }
 
-bool createSurface(SDL_Window* window, VkInstance instance, VkPhysicalDevice gpu, uint32_t graphicsFamilyQueueIndex, VkSurfaceKHR& outSurface) {
-    if (!SDL_Vulkan_CreateSurface(window, instance, &outSurface)) {
-        std::cout << "Unable to create Vulkan compatible surface using SDL\n";
-        return false;
+void createSurface(SDL_Window* window, VkInstance instance, VkPhysicalDevice gpu, uint32_t graphicsFamilyQueueIndex, VkSurfaceKHR& outSurface) {
+    if (SDL_TRUE != SDL_Vulkan_CreateSurface(window, instance, &outSurface)) {
+        throw std::runtime_error("Unable to create Vulkan compatible surface using SDL");
     }
 
     // Make sure the surface is compatible with the queue family and gpu
     VkBool32 supported = false;
     vkGetPhysicalDeviceSurfaceSupportKHR(gpu, graphicsFamilyQueueIndex, outSurface, &supported);
-    if (!supported) {
-        std::cout << "Surface is not supported by physical device!\n";
-        return false;
+    if (VK_TRUE != supported) {
+        throw std::runtime_error("Surface is not supported by physical device!");
     }
-
-    return true;
 }
 
 bool getPresentationMode(VkSurfaceKHR surface, VkPhysicalDevice device, VkPresentModeKHR& ioMode) {
@@ -485,43 +478,43 @@ bool getSurfaceFormat(VkPhysicalDevice device, VkSurfaceKHR surface, VkSurfaceFo
         return false;
     }
 
-    std::vector<VkSurfaceFormatKHR> found_formats(count);
-    if (vkGetPhysicalDeviceSurfaceFormatsKHR(device, surface, &count, found_formats.data()) != VK_SUCCESS) {
+    std::vector<VkSurfaceFormatKHR> foundFormats(count);
+    if (vkGetPhysicalDeviceSurfaceFormatsKHR(device, surface, &count, foundFormats.data()) != VK_SUCCESS) {
         std::cout << "unable to query all supported surface formats\n";
         return false;
     }
 
     // This means there are no restrictions on the supported format.
     // Preference would work
-    if (found_formats.size() == 1 && found_formats[0].format == VK_FORMAT_UNDEFINED) {
+    if (foundFormats.size() == 1 && foundFormats[0].format == VK_FORMAT_UNDEFINED) {
         outFormat.format = surfaceFormat;
         outFormat.colorSpace = colorSpace;
         return true;
     }
 
     // Otherwise check if both are supported
-    for (const auto& found_format_outer : found_formats) {
+    for (const auto& outerFormat : foundFormats) {
         // Format found
-        if (found_format_outer.format == surfaceFormat) {
-            outFormat.format = found_format_outer.format;
-            for (const auto& found_format_inner : found_formats) {
+        if (outerFormat.format == surfaceFormat) {
+            outFormat.format = outerFormat.format;
+            for (const auto& innerFormat : foundFormats) {
                 // Color space found
-                if (found_format_inner.colorSpace == colorSpace) {
-                    outFormat.colorSpace = found_format_inner.colorSpace;
+                if (innerFormat.colorSpace == colorSpace) {
+                    outFormat.colorSpace = innerFormat.colorSpace;
                     return true;
                 }
             }
 
             // No matching color space, pick first one
             std::cout << "warning: no matching color space found, picking first available one\n!";
-            outFormat.colorSpace = found_formats[0].colorSpace;
+            outFormat.colorSpace = foundFormats[0].colorSpace;
             return true;
         }
     }
 
     // No matching formats found
     std::cout << "warning: no matching color format found, picking first available one\n";
-    outFormat = found_formats[0];
+    outFormat = foundFormats[0];
     return true;
 }
 
@@ -1111,17 +1104,19 @@ std::vector<char> readFile(const std::string& filename) {
      return buffer;
 }
 
-bool createShaderModule(VkDevice device, const std::vector<char>& code, VkShaderModule& outShader) {
+VkShaderModule createShaderModule(VkDevice device, const std::vector<char>& code) {
     VkShaderModuleCreateInfo module_info = {};
     module_info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
     module_info.codeSize = code.size();
     module_info.pCode = reinterpret_cast<const uint32_t*>(code.data());
 
-    if (VK_SUCCESS == vkCreateShaderModule(device, &module_info, nullptr, &outShader)) {
-        return true;
+    VkShaderModule shaderModule = VK_NULL_HANDLE;
+
+    if (VK_SUCCESS != vkCreateShaderModule(device, &module_info, nullptr, &shaderModule)) {
+        throw std::runtime_error("failed to create shader module");
     }
 
-    return false;
+    return shaderModule;
 }
 
 VkPipelineLayout createPipelineLayout(VkDevice device, VkDescriptorSetLayout descriptorSetLayout) {
@@ -1346,9 +1341,7 @@ VkPipeline createComputePipeline(VkDevice device, VkPipelineLayout pipelineLayou
 
 VkShaderModule loadShaderModule(VkDevice device, const std::string& filename) {
     std::vector<char> code = readFile(filename);
-    VkShaderModule shader_module = VK_NULL_HANDLE;
-    createShaderModule(device, code, shader_module);
-    return shader_module;
+    return createShaderModule(device, code);
 }
 
 std::tuple<VkBuffer, VkDeviceMemory> createUniformbuffer(VkPhysicalDevice gpu, VkDevice device) {
@@ -1595,7 +1588,7 @@ VkSemaphore createSemaphore(VkDevice device) {
 VkQueue getPresentationQueue(VkPhysicalDevice gpu, VkDevice logicalDevice, uint graphicsQueueIndex, VkSurfaceKHR presentation_surface) {
     VkBool32 presentSupport = false;
     vkGetPhysicalDeviceSurfaceSupportKHR(gpu, graphicsQueueIndex, presentation_surface, &presentSupport);
-    if (presentSupport == false) {
+    if (VK_FALSE == presentSupport) {
         throw std::runtime_error("presentation queue is not supported on graphics queue index");
     }
 
@@ -1724,7 +1717,7 @@ bool presentQueue(VkQueue presentQueue, VkSwapchainKHR & swapchain, VkSemaphore 
 
     VkResult result = vkQueuePresentKHR(presentQueue, &presentInfo);
     if (result != VK_SUCCESS) {
-        if (result == VK_ERROR_OUT_OF_DATE_KHR) {
+        if (VK_ERROR_OUT_OF_DATE_KHR == result) {
             return false;
         } else {
             throw std::runtime_error("failed to present swap chain image!");
@@ -1775,21 +1768,18 @@ int main(int argc, char *argv[]) {
     selectGPU(instance, gpu, graphicsQueueIndex);
 
     // Create a logical device that interfaces with the physical device
-    VkDevice device;
-    if (!createLogicalDevice(gpu, graphicsQueueIndex, foundLayers, device))
-        return -1;
+    VkDevice device = createLogicalDevice(gpu, graphicsQueueIndex, foundLayers);
 
     // Create the surface we want to render to, associated with the window we created before
     // This call also checks if the created surface is compatible with the previously selected physical device and associated render queue
-    VkSurfaceKHR presentation_surface;
-    if (!createSurface(window, instance, gpu, graphicsQueueIndex, presentation_surface))
-        return -1;
+    VkSurfaceKHR presentationSurface;
+    createSurface(window, instance, gpu, graphicsQueueIndex, presentationSurface);
 
-    VkQueue presentationQueue = getPresentationQueue(gpu, device, graphicsQueueIndex, presentation_surface);
+    VkQueue presentationQueue = getPresentationQueue(gpu, device, graphicsQueueIndex, presentationSurface);
 
     // swap chain with image handles and views
     VkSwapchainKHR swapchain = VK_NULL_HANDLE;
-    createSwapChain(presentation_surface, gpu, device, swapchain);
+    createSwapChain(presentationSurface, gpu, device, swapchain);
 
     std::vector<VkImage> chainImages;
     getSwapChainImageHandles(device, swapchain, chainImages);
@@ -1824,7 +1814,7 @@ int main(int argc, char *argv[]) {
     // shader storage buffer
     VkBuffer shaderStorageBuffer;
     VkDeviceMemory shaderStorageBufferMemory;
-    std::tie(shaderStorageBuffer, shaderStorageBufferMemory) = createShaderStorageBuffer(gpu, device); // free
+    std::tie(shaderStorageBuffer, shaderStorageBufferMemory) = createShaderStorageBuffer(gpu, device);
 
     // descriptor of uniforms, both uniform buffer and sampler
     VkDescriptorSetLayout descriptorSetLayout = createDescriptorSetLayout(device);
@@ -1859,8 +1849,6 @@ int main(int argc, char *argv[]) {
     // buffers to render to for presenting
     std::vector<VkFramebuffer> frameBuffers(chainImages.size());
     makeFramebuffers(device, renderPass, chainImageViews, frameBuffers, depthImageView);
-
-    
 
     VkPipeline graphicsPipeline = createGraphicsPipeline(device, pipelineLayout, renderPass, vertShader, fragShader);
     VkPipeline computePipeline = createComputePipeline(device, pipelineLayout, compShader);
@@ -1927,7 +1915,7 @@ int main(int argc, char *argv[]) {
             std::tie(depthImageView, depthImage, depthMemory) = createDepthBuffer(gpu, device, commandPool, graphicsQueue);
 
             swapchain = VK_NULL_HANDLE;
-            createSwapChain(presentation_surface, gpu, device, swapchain);
+            createSwapChain(presentationSurface, gpu, device, swapchain);
             getSwapChainImageHandles(device, swapchain, chainImages);
             makeChainImageViews(device, swapchain, chainImages, chainImageViews);
             makeFramebuffers(device, renderPass, chainImageViews, frameBuffers, depthImageView);
@@ -1984,7 +1972,7 @@ int main(int argc, char *argv[]) {
     vkDestroyDevice(device, nullptr);
 
     destroyDebugReportCallbackEXT(instance, callback, nullptr);
-    vkDestroySurfaceKHR(instance, presentation_surface, nullptr);
+    vkDestroySurfaceKHR(instance, presentationSurface, nullptr);
     vkDestroyInstance(instance, nullptr);
     SDL_Quit();
 
