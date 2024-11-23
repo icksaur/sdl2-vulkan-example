@@ -102,19 +102,17 @@ void destroyDebugReportCallbackEXT(VkInstance instance, VkDebugReportCallbackEXT
     }
 }
 
-bool getAvailableVulkanLayers(std::vector<std::string>& outLayers) {
+void getAvailableVulkanLayers(std::vector<std::string>& outLayers) {
     // Figure out the amount of available layers
     // Layers are used for debugging / validation etc / profiling..
     unsigned int instance_layer_count = 0;
-    if (vkEnumerateInstanceLayerProperties(&instance_layer_count, NULL) != VK_SUCCESS) {
-        std::cout << "unable to query vulkan instance layer property count\n";
-        return false;
+    if (VK_SUCCESS != vkEnumerateInstanceLayerProperties(&instance_layer_count, NULL)) {
+        throw std::runtime_error("unable to query vulkan instance layer property count");
     }
 
     std::vector<VkLayerProperties> instance_layer_names(instance_layer_count);
-    if (vkEnumerateInstanceLayerProperties(&instance_layer_count, instance_layer_names.data()) != VK_SUCCESS) {
-        std::cout << "unable to retrieve vulkan instance layer names\n";
-        return false;
+    if (VK_SUCCESS != vkEnumerateInstanceLayerProperties(&instance_layer_count, instance_layer_names.data())) {
+        throw std::runtime_error("unable to retrieve vulkan instance layer names");
     }
 
     // Display layer names and find the ones we specified above
@@ -126,7 +124,7 @@ bool getAvailableVulkanLayers(std::vector<std::string>& outLayers) {
     int count = 0;
     outLayers.clear();
     for (const auto& name : instance_layer_names) {
-        std::cout << count << ": " << name.layerName << ": " << name.description << "\n";
+        std::cout << count << ": " << name.layerName << ": " << name.description << std::endl;
         auto it = requestedLayers.find(std::string(name.layerName));
         if (it != requestedLayers.end())
             outLayers.emplace_back(name.layerName);
@@ -134,46 +132,38 @@ bool getAvailableVulkanLayers(std::vector<std::string>& outLayers) {
     }
 
     // Print the ones we're enabling
-    std::cout << "\n";
+    std::cout << std::endl;
     for (const auto& layer : outLayers)
-        std::cout << "applying layer: " << layer.c_str() << "\n";
-    return true;
+        std::cout << "applying layer: " << layer.c_str() << std::endl;
 }
 
 
-bool getAvailableVulkanExtensions(SDL_Window* window, std::vector<std::string>& outExtensions) {
+void getAvailableVulkanExtensions(SDL_Window* window, std::vector<std::string>& outExtensions) {
     // Figure out the amount of extensions vulkan needs to interface with the os windowing system
     // This is necessary because vulkan is a platform agnostic API and needs to know how to interface with the windowing system
     unsigned int ext_count = 0;
-    if (!SDL_Vulkan_GetInstanceExtensions(window, &ext_count, nullptr))
-    {
-        std::cout << "Unable to query the number of Vulkan instance extensions\n";
-        return false;
+    if (SDL_TRUE != SDL_Vulkan_GetInstanceExtensions(window, &ext_count, nullptr)) {
+        throw std::runtime_error("Unable to query the number of Vulkan instance extensions");
     }
 
     // Use the amount of extensions queried before to retrieve the names of the extensions
     std::vector<const char*> ext_names(ext_count);
-    if (!SDL_Vulkan_GetInstanceExtensions(window, &ext_count, ext_names.data()))
-    {
-        std::cout << "Unable to query the number of Vulkan instance extension names\n";
-        return false;
+    if (SDL_TRUE != SDL_Vulkan_GetInstanceExtensions(window, &ext_count, ext_names.data())) {
+        throw std::runtime_error("Unable to query the number of Vulkan instance extension names");
     }
 
-    // Display names
     std::cout << "found " << ext_count << " Vulkan instance extensions:\n";
-    for (unsigned int i = 0; i < ext_count; i++)
-    {
-        std::cout << i << ": " << ext_names[i] << "\n";
+    for (unsigned int i = 0; i < ext_count; i++) {
+        std::cout << i << ": " << ext_names[i] << std::endl;
         outExtensions.emplace_back(ext_names[i]);
     }
 
     // Add debug display extension, we need this to relay debug messages
     outExtensions.emplace_back(VK_EXT_DEBUG_REPORT_EXTENSION_NAME);
-    std::cout << "\n";
-    return true;
+    std::cout << std::endl;
 }
 
-bool createVulkanInstance(const std::vector<std::string>& layerNames, const std::vector<std::string>& extensionNames, VkInstance& outInstance) {
+void createVulkanInstance(const std::vector<std::string>& layerNames, const std::vector<std::string>& extensionNames, VkInstance& outInstance) {
     // Copy layers
     std::vector<const char*> layer_names;
     for (const auto& layer : layerNames)
@@ -212,92 +202,84 @@ bool createVulkanInstance(const std::vector<std::string>& layerNames, const std:
     // Create vulkan runtime instance
     std::cout << "initializing Vulkan instance\n\n";
     VkResult res = vkCreateInstance(&inst_info, NULL, &outInstance);
-    switch (res)
-    {
-    case VK_SUCCESS:
-        break;
-    case VK_ERROR_INCOMPATIBLE_DRIVER:
-        std::cout << "unable to create vulkan instance, cannot find a compatible Vulkan ICD\n";
-        return false;
-    default:
-        std::cout << "unable to create Vulkan instance: unknown error\n";
-        return false;
+
+    if (VK_SUCCESS == res) {
+        return;
+    } else if (VK_ERROR_INCOMPATIBLE_DRIVER == res) {
+        throw std::runtime_error("unable to create vulkan instance, cannot find a compatible Vulkan ICD");
     }
-    return true;
+
+    throw std::runtime_error("unable to create Vulkan instance: unknown error");
 }
 
-bool selectGPU(VkInstance instance, VkPhysicalDevice& outDevice, unsigned int& outQueueFamilyIndex) {
+void selectGPU(VkInstance instance, VkPhysicalDevice& outDevice, unsigned int& outQueueFamilyIndex) {
     // Get number of available physical devices, needs to be at least 1
-    unsigned int physical_device_count = 0;
-    vkEnumeratePhysicalDevices(instance, &physical_device_count, nullptr);
-    if (physical_device_count == 0) {
-        std::cout << "No physical devices found\n";
-        return false;
+    unsigned int physicalDeviceCount = 0;
+    vkEnumeratePhysicalDevices(instance, &physicalDeviceCount, nullptr);
+    if (physicalDeviceCount == 0) {
+        throw std::runtime_error("No physical devices found");
     }
 
     // Now get the devices
-    std::vector<VkPhysicalDevice> physical_devices(physical_device_count);
-    vkEnumeratePhysicalDevices(instance, &physical_device_count, physical_devices.data());
+    std::vector<VkPhysicalDevice> physicalDevices(physicalDeviceCount);
+    vkEnumeratePhysicalDevices(instance, &physicalDeviceCount, physicalDevices.data());
 
     // Show device information
-    std::cout << "found " << physical_device_count << " GPU(s):\n";
+    std::cout << "found " << physicalDeviceCount << " GPU(s):\n";
     int count = 0;
-    std::vector<VkPhysicalDeviceProperties> physical_device_properties(physical_devices.size());
-    for (auto& physical_device : physical_devices) {
-        vkGetPhysicalDeviceProperties(physical_device, &(physical_device_properties[count]));
-        std::cout << count << ": " << physical_device_properties[count].deviceName << "\n";
+    std::vector<VkPhysicalDeviceProperties> physicalDeviceProperties(physicalDevices.size());
+    for (auto& physical_device : physicalDevices) {
+        vkGetPhysicalDeviceProperties(physical_device, &(physicalDeviceProperties[count]));
+        std::cout << count << ": " << physicalDeviceProperties[count].deviceName << std::endl;
         count++;
     }
 
     // Select one if more than 1 is available
-    unsigned int selection_id = 0;
-    if (physical_device_count > 1)  {
+    unsigned int selectionId = 0;
+    if (physicalDeviceCount > 1)  {
         while (true) {
             std::cout << "select device: ";
-            std::cin  >> selection_id;
-            if (selection_id >= physical_device_count) {
-                std::cout << "invalid selection, expected a value between 0 and " << physical_device_count - 1 << "\n";
+            std::cin  >> selectionId;
+            if (selectionId >= physicalDeviceCount) {
+                std::cout << "invalid selection, expected a value between 0 and " << physicalDeviceCount - 1 << std::endl;
                 continue;
             }
             break;
         }
     }
 
-    std::cout << "selected: " << physical_device_properties[selection_id].deviceName << "\n";
-    VkPhysicalDevice selected_device = physical_devices[selection_id];
+    std::cout << "selected: " << physicalDeviceProperties[selectionId].deviceName << std::endl;
+    VkPhysicalDevice selectedDevice = physicalDevices[selectionId];
 
     // Find the number queues this device supports, we want to make sure that we have a queue that supports graphics commands
-    unsigned int family_queue_count = 0;
-    vkGetPhysicalDeviceQueueFamilyProperties(selected_device, &family_queue_count, nullptr);
-    if (family_queue_count == 0) {
-        std::cout << "device has no family of queues associated with it\n";
-        return false;
+    unsigned int familyQueueCount = 0;
+    vkGetPhysicalDeviceQueueFamilyProperties(selectedDevice, &familyQueueCount, nullptr);
+    if (familyQueueCount == 0) {
+        throw std::runtime_error("device has no family of queues associated with it");
     }
 
     // Extract the properties of all the queue families
-    std::vector<VkQueueFamilyProperties> queue_properties(family_queue_count);
-    vkGetPhysicalDeviceQueueFamilyProperties(selected_device, &family_queue_count, queue_properties.data());
+    std::vector<VkQueueFamilyProperties> queue_properties(familyQueueCount);
+    vkGetPhysicalDeviceQueueFamilyProperties(selectedDevice, &familyQueueCount, queue_properties.data());
 
     // Make sure the family of commands contains an option to issue graphical commands.
-    int queue_node_index = -1;
-    for (unsigned int i = 0; i < family_queue_count; i++) {
+    int queueNodeIndex = -1;
+    for (unsigned int i = 0; i < familyQueueCount; i++) {
         if (queue_properties[i].queueCount > 0
         && (queue_properties[i].queueFlags & VK_QUEUE_GRAPHICS_BIT)
         && (queue_properties[i].queueFlags & VK_QUEUE_COMPUTE_BIT)) {
-            queue_node_index = i;
+            queueNodeIndex = i;
             break;
         }
     }
 
-    if (queue_node_index == -1) {
-        std::cout << "Unable to find a queue command family that accepts graphics commands\n";
-        return false;
+    if (queueNodeIndex == -1) {
+        throw std::runtime_error("Unable to find a queue command family that accepts graphics commands");
     }
 
     // Set the output variables
-    outDevice = selected_device;
-    outQueueFamilyIndex = queue_node_index;
-    return true;
+    outDevice = selectedDevice;
+    outQueueFamilyIndex = queueNodeIndex;
 }
 
 bool createLogicalDevice(VkPhysicalDevice& physicalDevice,
@@ -313,17 +295,15 @@ bool createLogicalDevice(VkPhysicalDevice& physicalDevice,
     
     // Get the number of available extensions for our graphics card
     uint32_t device_property_count(0);
-    if (vkEnumerateDeviceExtensionProperties(physicalDevice, NULL, &device_property_count, NULL) != VK_SUCCESS) {
-        std::cout << "Unable to acquire device extension property count\n";
-        return false;
+    if (VK_SUCCESS != vkEnumerateDeviceExtensionProperties(physicalDevice, NULL, &device_property_count, NULL)) {
+        throw std::runtime_error("Unable to acquire device extension property count");
     }
     std::cout << "\nfound " << device_property_count << " device extensions\n";
 
     // Acquire their actual names
     std::vector<VkExtensionProperties> device_properties(device_property_count);
-    if (vkEnumerateDeviceExtensionProperties(physicalDevice, NULL, &device_property_count, device_properties.data()) != VK_SUCCESS) {
-        std::cout << "Unable to acquire device extension property names\n";
-        return false;
+    if (VK_SUCCESS != vkEnumerateDeviceExtensionProperties(physicalDevice, NULL, &device_property_count, device_properties.data())) {
+        throw std::runtime_error("Unable to acquire device extension property names");
     }
 
     // Match names against requested extension
@@ -331,7 +311,7 @@ bool createLogicalDevice(VkPhysicalDevice& physicalDevice,
     const std::set<std::string> required_extension_names{VK_KHR_SWAPCHAIN_EXTENSION_NAME};
     int count = 0;
     for (const auto& ext_property : device_properties) {
-        std::cout << count << ": " << ext_property.extensionName << "\n";
+        std::cout << count << ": " << ext_property.extensionName << std::endl;
         auto it = required_extension_names.find(std::string(ext_property.extensionName));
         if (it != required_extension_names.end()) {
             device_property_names.emplace_back(ext_property.extensionName);
@@ -341,13 +321,12 @@ bool createLogicalDevice(VkPhysicalDevice& physicalDevice,
 
     // Warn if not all required extensions were found
     if (required_extension_names.size() != device_property_names.size()) {
-        std::cout << "not all required device extensions are supported!\n";
-        return false;
+        throw std::runtime_error("not all required device extensions are supported!");
     }
 
-    std::cout << "\n";
+    std::cout << std::endl;
     for (const auto& name : device_property_names) {
-        std::cout << "applying device extension: " << name << "\n";
+        std::cout << "applying device extension: " << name << std::endl;
     }
 
     // Create queue information structure used by device based on the previously fetched queue information from the physical device
@@ -375,9 +354,8 @@ bool createLogicalDevice(VkPhysicalDevice& physicalDevice,
     create_info.flags = 0;
 
     // Finally we're ready to create a new device
-    if (vkCreateDevice(physicalDevice, &create_info, nullptr, &outDevice) != VK_SUCCESS) {
-        std::cout << "failed to create logical device!\n";
-        return false;
+    if (VK_SUCCESS != vkCreateDevice(physicalDevice, &create_info, nullptr, &outDevice)) {
+        throw std::runtime_error("failed to create logical device!");
     }
     return true;
 }
@@ -467,7 +445,7 @@ bool getImageUsage(const VkSurfaceCapabilitiesKHR& capabilities, VkImageUsageFla
     for (const auto& usage : desiredUsages) {
         VkImageUsageFlags image_usage = usage & capabilities.supportedUsageFlags;
         if (image_usage != usage) {
-            std::cout << "unsupported image usage flag: " << usage << "\n";
+            std::cout << "unsupported image usage flag: " << usage << std::endl;
             return false;
         }
 
@@ -902,27 +880,27 @@ std::tuple<VkImage, VkDeviceMemory, VkImageView> createImageFromTGAFile(const ch
     return std::make_tuple(image, memory, imageView);
 }
 
-bool createSwapChain(VkSurfaceKHR surface, VkPhysicalDevice physicalDevice, VkDevice device, VkSwapchainKHR& outSwapChain) {
+void createSwapChain(VkSurfaceKHR surface, VkPhysicalDevice physicalDevice, VkDevice device, VkSwapchainKHR& outSwapChain) {
     vkDeviceWaitIdle(device);
 
-    // Get properties of surface, necessary for creation of swap-chain
-    VkSurfaceCapabilitiesKHR surfaceProperties;
-    if (!getSurfaceProperties(physicalDevice, surface, surfaceProperties)) {
-        return false;
+    // Get the surface capabilities
+    VkSurfaceCapabilitiesKHR surfaceCapabilities;
+    if(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physicalDevice, surface, &surfaceCapabilities) != VK_SUCCESS) {
+        throw std::runtime_error("failed to acquire surface capabilities");
     }
 
     // Get the image presentation mode (synced, immediate etc.)
     VkPresentModeKHR presentation_mode = preferredPresentationMode;
     if (!getPresentationMode(surface, physicalDevice, presentation_mode)) {
-        return false;
+        throw std::runtime_error("failed to get presentation mode");
     }
 
     // Get other swap chain related features
-    unsigned int swapImageCount = getNumberOfSwapImages(surfaceProperties);
+    unsigned int swapImageCount = getNumberOfSwapImages(surfaceCapabilities);
     std::cout << "swap chain image count: " << swapImageCount << std::endl;
 
     // Size of the images
-    VkExtent2D swap_image_extent = getSwapImageSize(surfaceProperties);
+    VkExtent2D swap_image_extent = getSwapImageSize(surfaceCapabilities);
 
     pipelineInfo.w = (float)swap_image_extent.width;
     pipelineInfo.h = (float)swap_image_extent.height;
@@ -931,17 +909,17 @@ bool createSwapChain(VkSurfaceKHR surface, VkPhysicalDevice physicalDevice, VkDe
 
     // Get image usage (color etc.)
     VkImageUsageFlags usageFlags;
-    if (!getImageUsage(surfaceProperties, usageFlags)) {
-        return false;
+    if (!getImageUsage(surfaceCapabilities, usageFlags)) {
+        throw std::runtime_error("failed to get image usage flags");
     }
 
     // Get the transform, falls back on current transform when transform is not supported
-    VkSurfaceTransformFlagBitsKHR transform = getSurfaceTransform(surfaceProperties);
+    VkSurfaceTransformFlagBitsKHR transform = getSurfaceTransform(surfaceCapabilities);
 
     // Get swapchain image format
     VkSurfaceFormatKHR imageFormat;
     if (!getSurfaceFormat(physicalDevice, surface, imageFormat)) {
-        return false;
+        throw std::runtime_error("failed to get surface format");
     }
 
     pipelineInfo.colorFormat = imageFormat.format;
@@ -970,38 +948,29 @@ bool createSwapChain(VkSurfaceKHR surface, VkPhysicalDevice physicalDevice, VkDe
     swapInfo.oldSwapchain = NULL;
     swapInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
 
+    // Create a new one
+    if (VK_SUCCESS != vkCreateSwapchainKHR(device, &swapInfo, nullptr, &outSwapChain)) {
+        throw std::runtime_error("unable to create swap chain");
+    }
+
     // Destroy old swap chain
     if (oldSwapChain != VK_NULL_HANDLE) {
         vkDestroySwapchainKHR(device, oldSwapChain, nullptr);
         oldSwapChain = VK_NULL_HANDLE;
     }
-
-    // Create new one
-    if (vkCreateSwapchainKHR(device, &swapInfo, nullptr, &oldSwapChain) != VK_SUCCESS) {
-        std::cout << "unable to create swap chain\n";
-        return false;
-    }
-
-    // Store handle
-    outSwapChain = oldSwapChain;
-    return true;
 }
 
-bool getSwapChainImageHandles(VkDevice device, VkSwapchainKHR chain, std::vector<VkImage>& outImageHandles) {
+void getSwapChainImageHandles(VkDevice device, VkSwapchainKHR chain, std::vector<VkImage>& outImageHandles) {
     unsigned int imageCount = 0;
-    VkResult res = vkGetSwapchainImagesKHR(device, chain, &imageCount, nullptr);
-    if (res != VK_SUCCESS) {
-        std::cout << "unable to get number of images in swap chain\n";
-        return false;
+    if (VK_SUCCESS != vkGetSwapchainImagesKHR(device, chain, &imageCount, nullptr)) {
+        throw std::runtime_error("unable to get number of images in swap chain");
     }
 
     outImageHandles.clear();
     outImageHandles.resize(imageCount);
-    if (vkGetSwapchainImagesKHR(device, chain, &imageCount, outImageHandles.data()) != VK_SUCCESS) {
-        std::cout << "unable to get image handles from swap chain\n";
-        return false;
+    if (VK_SUCCESS != vkGetSwapchainImagesKHR(device, chain, &imageCount, outImageHandles.data())) {
+        throw std::runtime_error("unable to get image handles from swap chain");
     }
-    return true;
 }
 
 std::tuple<VkImageView, VkImage, VkDeviceMemory> createDepthBuffer(VkPhysicalDevice gpu, VkDevice device, VkCommandPool commandPool, VkQueue graphicsQueue) {
@@ -1132,7 +1101,7 @@ void makeFramebuffers(VkDevice device, VkRenderPass renderPass, std::vector<VkIm
 std::vector<char> readFile(const std::string& filename) {
     std::ifstream file(filename, std::ios::ate | std::ios::binary);
     if (!file.is_open()) {
-        std::cout << "unable to open file: " << filename << "\n";
+        std::cout << "unable to open file: " << filename << std::endl;
         return {};
      }
      std::vector<char> buffer(file.tellg());
@@ -1781,23 +1750,20 @@ int main(int argc, char *argv[]) {
     // SDL takes care of this call and returns, next to the default VK_KHR_surface a platform specific extension
     // When initializing the vulkan instance these extensions have to be enabled in order to create a valid
     // surface later on.
-    std::vector<std::string> found_extensions;
-    if (!getAvailableVulkanExtensions(window, found_extensions))
-        return -1;
+    std::vector<std::string> foundExtensions;
+    getAvailableVulkanExtensions(window, foundExtensions);
 
     // Get available vulkan layer extensions, notify when not all could be found
-    std::vector<std::string> found_layers;
-    if (!getAvailableVulkanLayers(found_layers))
-        return -1;
+    std::vector<std::string> foundLayers;
+    getAvailableVulkanLayers(foundLayers);
 
     // Warn when not all requested layers could be found
-    if (found_layers.size() != getRequestedLayerNames().size())
+    if (foundLayers.size() != getRequestedLayerNames().size())
         std::cout << "warning! not all requested layers could be found!\n";
 
     // Create Vulkan Instance
     VkInstance instance;
-    if (!createVulkanInstance(found_layers, found_extensions, instance))
-        return -1;
+    createVulkanInstance(foundLayers, foundExtensions, instance);
 
     // Vulkan messaging callback
     VkDebugReportCallbackEXT callback;
@@ -1806,12 +1772,11 @@ int main(int argc, char *argv[]) {
     // Select GPU after succsessful creation of a vulkan instance (jeeeej no global states anymore)
     VkPhysicalDevice gpu;
     unsigned int graphicsQueueIndex(-1);
-    if (!selectGPU(instance, gpu, graphicsQueueIndex))
-        return -1;
+    selectGPU(instance, gpu, graphicsQueueIndex);
 
     // Create a logical device that interfaces with the physical device
     VkDevice device;
-    if (!createLogicalDevice(gpu, graphicsQueueIndex, found_layers, device))
+    if (!createLogicalDevice(gpu, graphicsQueueIndex, foundLayers, device))
         return -1;
 
     // Create the surface we want to render to, associated with the window we created before
@@ -1823,13 +1788,11 @@ int main(int argc, char *argv[]) {
     VkQueue presentationQueue = getPresentationQueue(gpu, device, graphicsQueueIndex, presentation_surface);
 
     // swap chain with image handles and views
-    VkSwapchainKHR swapchain = NULL;
-    if (!createSwapChain(presentation_surface, gpu, device, swapchain))
-        return -1;
+    VkSwapchainKHR swapchain = VK_NULL_HANDLE;
+    createSwapChain(presentation_surface, gpu, device, swapchain);
 
     std::vector<VkImage> chainImages;
-    if (!getSwapChainImageHandles(device, swapchain, chainImages))
-        return -1;
+    getSwapChainImageHandles(device, swapchain, chainImages);
 
     std::vector<VkImageView> chainImageViews(chainImages.size());
     makeChainImageViews(device, swapchain, chainImages, chainImageViews);
@@ -1897,6 +1860,8 @@ int main(int argc, char *argv[]) {
     std::vector<VkFramebuffer> frameBuffers(chainImages.size());
     makeFramebuffers(device, renderPass, chainImageViews, frameBuffers, depthImageView);
 
+    
+
     VkPipeline graphicsPipeline = createGraphicsPipeline(device, pipelineLayout, renderPass, vertShader, fragShader);
     VkPipeline computePipeline = createComputePipeline(device, pipelineLayout, compShader);
 
@@ -1962,12 +1927,8 @@ int main(int argc, char *argv[]) {
             std::tie(depthImageView, depthImage, depthMemory) = createDepthBuffer(gpu, device, commandPool, graphicsQueue);
 
             swapchain = VK_NULL_HANDLE;
-            if (!createSwapChain(presentation_surface, gpu, device, swapchain)) {
-                throw std::runtime_error("failed to recreate swap chain");
-            }
-            if (!getSwapChainImageHandles(device, swapchain, chainImages)) {
-                throw std::runtime_error("failed to re-obtain swap chain images");
-            }
+            createSwapChain(presentation_surface, gpu, device, swapchain);
+            getSwapChainImageHandles(device, swapchain, chainImages);
             makeChainImageViews(device, swapchain, chainImages, chainImageViews);
             makeFramebuffers(device, renderPass, chainImageViews, frameBuffers, depthImageView);
         }
