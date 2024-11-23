@@ -25,6 +25,9 @@ VkColorSpaceKHR colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
 VkImageUsageFlags desiredImageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
 VkFormat depthFormat = VK_FORMAT_D24_UNORM_S8_UINT; // some options are VK_FORMAT_D32_SFLOAT, VK_FORMAT_D32_SFLOAT_S8_UINT, VK_FORMAT_D24_UNORM_S8_UINT
 
+#define COMPUTE_VERTICES
+size_t quadCount = 100;
+
 struct PipelineInfo {
     float w, h;
     VkExtent2D extent;
@@ -278,7 +281,9 @@ bool selectGPU(VkInstance instance, VkPhysicalDevice& outDevice, unsigned int& o
     // Make sure the family of commands contains an option to issue graphical commands.
     int queue_node_index = -1;
     for (unsigned int i = 0; i < family_queue_count; i++) {
-        if (queue_properties[i].queueCount > 0 && queue_properties[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) {
+        if (queue_properties[i].queueCount > 0
+        && (queue_properties[i].queueFlags & VK_QUEUE_GRAPHICS_BIT)
+        && (queue_properties[i].queueFlags & VK_QUEUE_COMPUTE_BIT)) {
             queue_node_index = i;
             break;
         }
@@ -542,7 +547,7 @@ bool getSurfaceFormat(VkPhysicalDevice device, VkSurfaceKHR surface, VkSurfaceFo
     return true;
 }
 
-std::tuple<VkBuffer, VkDeviceMemory> createBuffer(VkPhysicalDevice gpu, VkDevice device, VkBufferUsageFlagBits usageFlags, size_t byteCount) {
+std::tuple<VkBuffer, VkDeviceMemory> createBuffer(VkPhysicalDevice gpu, VkDevice device, VkBufferUsageFlags usageFlags, size_t byteCount) {
     VkBuffer buffer;
     VkDeviceMemory memory;
 
@@ -1153,7 +1158,7 @@ bool createShaderModule(VkDevice device, const std::vector<char>& code, VkShader
 VkPipelineLayout createPipelineLayout(VkDevice device, VkDescriptorSetLayout descriptorSetLayout) {
     VkPipelineLayoutCreateInfo pipelineLayoutInfo = {};
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    pipelineLayoutInfo.setLayoutCount = 1;
+    pipelineLayoutInfo.setLayoutCount = 1;  
     pipelineLayoutInfo.pSetLayouts = &descriptorSetLayout;
 
     VkPipelineLayout pipelineLayout;
@@ -1353,6 +1358,23 @@ VkPipeline createGraphicsPipeline(VkDevice device, VkPipelineLayout pipelineLayo
     return pipeline;
 }
 
+VkPipeline createComputePipeline(VkDevice device, VkPipelineLayout pipelineLayout, VkShaderModule computeShaderModule) {
+    VkComputePipelineCreateInfo pipelineInfo = {};
+    pipelineInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+    pipelineInfo.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    pipelineInfo.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+    pipelineInfo.stage.module = computeShaderModule;
+    pipelineInfo.stage.pName = "main";
+    pipelineInfo.layout = pipelineLayout;
+
+    VkPipeline computePipeline;
+    if (VK_SUCCESS != vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &computePipeline)) {
+        throw std::runtime_error("failed to create compute pipeline!");
+    }
+
+    return computePipeline;
+}
+
 VkShaderModule loadShaderModule(VkDevice device, const std::string& filename) {
     std::vector<char> code = readFile(filename);
     VkShaderModule shader_module = VK_NULL_HANDLE;
@@ -1366,7 +1388,7 @@ std::tuple<VkBuffer, VkDeviceMemory> createUniformbuffer(VkPhysicalDevice gpu, V
 
     Camera camera;
     camera.perspective(0.5f*M_PI, windowWidth, windowHeight, 0.1f, 100.0f);
-    camera.moveTo(1.0f, 0.0f, -0.1f).lookAt(0.0f, 0.0f, 0.0f);
+    camera.moveTo(1.0f, 0.0f, -0.1f).lookAt(0.0f, 0.0f, 1.0f);
     mat16f viewProjection = camera.getViewProjection();
 
     size_t byteCount = sizeof(float)*16; // 4x4 matrix
@@ -1378,6 +1400,17 @@ std::tuple<VkBuffer, VkDeviceMemory> createUniformbuffer(VkPhysicalDevice gpu, V
     vkUnmapMemory(device, uniformBufferMemory);                              // Unmap memory after copying
 
     return std::make_tuple(uniformBuffer, uniformBufferMemory);
+}
+
+std::tuple<VkBuffer, VkDeviceMemory> createShaderStorageBuffer(VkPhysicalDevice gpu, VkDevice device) {
+    VkBuffer buffer;
+    VkDeviceMemory memory;
+
+    size_t byteCount = sizeof(float) * 5 * 6 * quadCount; // 6 vertices of 5 floats each per quad
+
+    std::tie(buffer, memory) = createBuffer(gpu, device, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT|VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, byteCount);
+
+    return std::make_tuple(buffer, memory);
 }
 
 std::tuple<VkBuffer, VkDeviceMemory> createVertexBuffer(VkPhysicalDevice gpu, VkDevice device) {
@@ -1413,26 +1446,39 @@ std::tuple<VkBuffer, VkDeviceMemory> createVertexBuffer(VkPhysicalDevice gpu, Vk
     return std::make_tuple(vertexBuffer, vertexBufferMemory);
 }
 
+std::tuple<VkBuffer, VkDeviceMemory> createSSBO(VkPhysicalDevice gpu, VkDevice device, size_t byteCount) {
+    VkBuffer buffer;
+    VkDeviceMemory memory;
+    return createBuffer(gpu, device, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, byteCount);
+}
+
 VkDescriptorSetLayout createDescriptorSetLayout(VkDevice device) {
     VkDescriptorSetLayoutBinding uboLayoutBinding = {};
-    uboLayoutBinding.binding = 0;
+    uboLayoutBinding.binding = 0; // match binding point in shader
     uboLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     uboLayoutBinding.descriptorCount = 1;
     uboLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
     uboLayoutBinding.pImmutableSamplers = nullptr;  // No sampler here
 
     VkDescriptorSetLayoutBinding samplerLayoutBinding = {};
-    samplerLayoutBinding.binding = 1;
+    samplerLayoutBinding.binding = 1; // match binding point in shader
     samplerLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; // binds both VkImageView and VkSampler
     samplerLayoutBinding.descriptorCount = 1;
     samplerLayoutBinding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     samplerLayoutBinding.pImmutableSamplers = nullptr; // no sampler here either?
 
-    VkDescriptorSetLayoutBinding bindings[] {uboLayoutBinding, samplerLayoutBinding};
+    VkDescriptorSetLayoutBinding ssboLayoutBinding = {};
+    ssboLayoutBinding.binding = 2, // match binding point in shader
+    ssboLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+    ssboLayoutBinding.descriptorCount = 1;
+    ssboLayoutBinding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    ssboLayoutBinding.pImmutableSamplers = nullptr;
+
+    VkDescriptorSetLayoutBinding bindings[] {uboLayoutBinding, samplerLayoutBinding, ssboLayoutBinding};
 
     VkDescriptorSetLayoutCreateInfo layoutInfo = {};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layoutInfo.bindingCount = 2;
+    layoutInfo.bindingCount = 3;
     layoutInfo.pBindings = bindings;
 
     VkDescriptorSetLayout descriptorSetLayout;
@@ -1444,22 +1490,24 @@ VkDescriptorSetLayout createDescriptorSetLayout(VkDevice device) {
 }
 
 std::tuple<VkDescriptorPool, VkDescriptorSet> createDescriptorSet(VkDevice device, VkDescriptorSetLayout descriptorSetLayout) {
-    VkDescriptorPoolSize poolSizes[2];
+    VkDescriptorPoolSize poolSizes[3];
     poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     poolSizes[0].descriptorCount = 1;
     poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; // binds both VkImageView and VkSampler
     poolSizes[1].descriptorCount = 1;
+    poolSizes[2].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER; // compute shader storage buffer
+    poolSizes[2].descriptorCount = 1;
 
     VkDescriptorPoolCreateInfo descriptorPoolCreateInfo = {};
     descriptorPoolCreateInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    descriptorPoolCreateInfo.poolSizeCount = 2;
+    descriptorPoolCreateInfo.poolSizeCount = 3;
     descriptorPoolCreateInfo.pPoolSizes = poolSizes;
-    descriptorPoolCreateInfo.maxSets = 2;
+    descriptorPoolCreateInfo.maxSets = 3;
 
     VkDescriptorPool descriptorPool;
     vkCreateDescriptorPool(device, &descriptorPoolCreateInfo, nullptr, &descriptorPool);
 
-    VkDescriptorSetAllocateInfo allocInfo  = {};
+    VkDescriptorSetAllocateInfo allocInfo = {};
     allocInfo.sType  = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
     allocInfo.descriptorPool  = descriptorPool;
     allocInfo.descriptorSetCount = 1;
@@ -1480,7 +1528,7 @@ VkWriteDescriptorSet createBufferToDescriptorSetBinding(VkDevice device, VkDescr
     VkWriteDescriptorSet descriptorWrite = {};
     descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     descriptorWrite.dstSet = descriptorSet;
-    descriptorWrite.dstBinding = 0;
+    descriptorWrite.dstBinding = 0; // match binding point in shader
     descriptorWrite.dstArrayElement = 0;
     descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     descriptorWrite.descriptorCount = 1;
@@ -1498,11 +1546,29 @@ VkWriteDescriptorSet createSamplerToDescriptorSetBinding(VkDevice device, VkDesc
     VkWriteDescriptorSet descriptorWrite = {};
     descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     descriptorWrite.dstSet = descriptorSet;
-    descriptorWrite.dstBinding = 1;  // match binding point in shader
+    descriptorWrite.dstBinding = 1; // match binding point in shader
     descriptorWrite.dstArrayElement = 0;
     descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     descriptorWrite.descriptorCount = 1;
     descriptorWrite.pImageInfo = &imageInfo;
+
+    return descriptorWrite;
+}
+
+VkWriteDescriptorSet createSsboToDescriptorSetBinding(VkDevice device, VkDescriptorSet descriptorSet, VkBuffer shaderStorageBuffer, VkDescriptorBufferInfo & bufferInfo) {
+    bufferInfo = {};
+    bufferInfo.buffer = shaderStorageBuffer;
+    bufferInfo.offset = 0;
+    bufferInfo.range = VK_WHOLE_SIZE;
+
+    VkWriteDescriptorSet descriptorWrite = {};
+    descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    descriptorWrite.dstSet = descriptorSet;
+    descriptorWrite.dstBinding = 2; // match binding point in shader
+    descriptorWrite.dstArrayElement = 0;
+    descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    descriptorWrite.descriptorCount = 1;
+    descriptorWrite.pBufferInfo = &bufferInfo;
 
     return descriptorWrite;
 }
@@ -1526,7 +1592,7 @@ VkCommandPool createCommandPool(VkDevice device, uint32_t queueFamilyIndex) {
     return commandPool;
 }
 
-VkCommandBuffer createCommandBuffer(VkDevice device, VkPipeline graphicsPipeline, VkCommandPool commandPool) {
+VkCommandBuffer createCommandBuffer(VkDevice device, VkCommandPool commandPool) {
     VkCommandBuffer commandBuffer;
 
     VkCommandBufferAllocateInfo allocInfo = {};
@@ -1585,6 +1651,7 @@ VkFence createFence(VkDevice device) {
 }
 
 void recordRenderPass(
+    VkPipeline computePipeline,
     VkPipeline graphicsPipeline,
     VkRenderPass renderPass,
     VkFramebuffer framebuffer,
@@ -1621,15 +1688,24 @@ void recordRenderPass(
     // begin recording the render pass
     vkCmdBeginRenderPass(commandBuffer, &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
 
+    // bind and dispatch compute
+    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, computePipeline);
+    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout, 0, 1, &descriptorSet, 0, NULL);
+    vkCmdDispatch(commandBuffer, 1, 1, 1); 
+
     // Bind the descriptor which contains the shader uniform buffer
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
-
     vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipelineLayout, 0, 1, &descriptorSet, 0, NULL);
 
     VkDeviceSize offsets[] = { 0 };
     vkCmdBindVertexBuffers(commandBuffer, 0, 1, &vertexBuffer, offsets);  // Bind the vertex buffer
 
-    vkCmdDraw(commandBuffer, 12, 1, 0, 0);  // Draw 12 vertices (4 tris, 2 quads)
+#ifdef COMPUTE_VERTICES
+    size_t vertexCount = 6 * quadCount;
+#else 
+    size_t vertexCount = 6 * 2;
+#endif
+    vkCmdDraw(commandBuffer, vertexCount, 1, 0, 0);
 
     vkCmdEndRenderPass(commandBuffer);
 
@@ -1767,6 +1843,7 @@ int main(int argc, char *argv[]) {
     // shader objects
     VkShaderModule vertShader = loadShaderModule(device, "tri.vert.spv");
     VkShaderModule fragShader = loadShaderModule(device, "tri.frag.spv");
+    VkShaderModule compShader = loadShaderModule(device, "vertices.comp.spv");
 
     // image for sampling
     VkDeviceMemory textureImageMemory;
@@ -1781,6 +1858,11 @@ int main(int argc, char *argv[]) {
     VkDeviceMemory uniformBufferMemory;
     std::tie(uniformBuffer, uniformBufferMemory) = createUniformbuffer(gpu, device);
 
+    // shader storage buffer
+    VkBuffer shaderStorageBuffer;
+    VkDeviceMemory shaderStorageBufferMemory;
+    std::tie(shaderStorageBuffer, shaderStorageBufferMemory) = createShaderStorageBuffer(gpu, device); // free
+
     // descriptor of uniforms, both uniform buffer and sampler
     VkDescriptorSetLayout descriptorSetLayout = createDescriptorSetLayout(device);
     
@@ -1788,12 +1870,15 @@ int main(int argc, char *argv[]) {
     VkDescriptorSet descriptorSet;
     std::tie(descriptorPool, descriptorSet) = createDescriptorSet(device, descriptorSetLayout);
 
-    VkDescriptorBufferInfo bufferInfo;
+    // memory for these have to survive until updateDescriptorSet below
+    VkDescriptorBufferInfo uniformBufferInfo;
     VkDescriptorImageInfo imageInfo;
+    VkDescriptorBufferInfo shaderStorageBufferInfo;
 
     std::vector<VkWriteDescriptorSet> descriptorWriteSets;
-    descriptorWriteSets.push_back(createBufferToDescriptorSetBinding(device, descriptorSet, uniformBuffer, bufferInfo));
+    descriptorWriteSets.push_back(createBufferToDescriptorSetBinding(device, descriptorSet, uniformBuffer, uniformBufferInfo));
     descriptorWriteSets.push_back(createSamplerToDescriptorSetBinding(device, descriptorSet, textureSampler, textureImageView, imageInfo));
+    descriptorWriteSets.push_back(createSsboToDescriptorSetBinding(device, descriptorSet, shaderStorageBuffer, shaderStorageBufferInfo));
 
     updateDescriptorSet(device, descriptorSet, descriptorWriteSets);
 
@@ -1812,7 +1897,8 @@ int main(int argc, char *argv[]) {
     std::vector<VkFramebuffer> frameBuffers(chainImages.size());
     makeFramebuffers(device, renderPass, chainImageViews, frameBuffers, depthImageView);
 
-    VkPipeline pipeline = createGraphicsPipeline(device, pipelineLayout, renderPass, vertShader, fragShader);
+    VkPipeline graphicsPipeline = createGraphicsPipeline(device, pipelineLayout, renderPass, vertShader, fragShader);
+    VkPipeline computePipeline = createComputePipeline(device, pipelineLayout, compShader);
 
     // vertex buffer for our vertices
     VkBuffer vertexBuffer;
@@ -1822,7 +1908,7 @@ int main(int argc, char *argv[]) {
     // command buffers for drawing
     std::vector<VkCommandBuffer> commandBuffers(chainImages.size());
     for (auto & commandBuffer : commandBuffers) {
-        commandBuffer = createCommandBuffer(device, pipeline, commandPool);
+        commandBuffer = createCommandBuffer(device, commandPool);
     }
 
     // sync primitives
@@ -1849,10 +1935,15 @@ int main(int argc, char *argv[]) {
             throw std::runtime_error("vkAcquireNextImageKHR failed");
         }
 
-        recordRenderPass(pipeline, renderPass, frameBuffers[nextImage], commandBuffers[nextImage], vertexBuffer, pipelineLayout, descriptorSet);
+#ifdef COMPUTE_VERTICES
+        recordRenderPass(computePipeline, graphicsPipeline, renderPass, frameBuffers[nextImage], commandBuffers[nextImage], shaderStorageBuffer, pipelineLayout, descriptorSet);
+#else
+        recordRenderPass(computePipeline, graphicsPipeline, renderPass, frameBuffers[nextImage], commandBuffers[nextImage], vertexBuffer, pipelineLayout, descriptorSet);
+#endif
         submitCommandBuffer(graphicsQueue, commandBuffers[nextImage], imageAvailableSemaphore, renderFinishedSemaphore);
         if (!presentQueue(presentationQueue, swapchain, renderFinishedSemaphore, nextImage)) {
             std::cout << "swap chain out of date, trying to remake" << std::endl;
+
             // This is a common Vulkan situation handled automatically by OpenGL.
             // We need to remake our swap chain, image views, and framebuffers.
             vkDeviceWaitIdle(device);
@@ -1897,6 +1988,9 @@ int main(int argc, char *argv[]) {
     vkDestroyBuffer(device, uniformBuffer, nullptr);
     vkFreeMemory(device, uniformBufferMemory,  nullptr);
 
+    vkDestroyBuffer(device, shaderStorageBuffer, nullptr);
+    vkFreeMemory(device, shaderStorageBufferMemory, nullptr);
+
     // freeing each descriptor requires the pool have the "free" bit. Look online for use cases for individual free.
     vkResetDescriptorPool(device, descriptorPool, 0); // frees all the descriptors
     vkDestroyDescriptorPool(device, descriptorPool, nullptr);
@@ -1916,7 +2010,7 @@ int main(int argc, char *argv[]) {
     vkDestroyFence(device, fence, nullptr);
     vkDestroyShaderModule(device, vertShader, nullptr);
     vkDestroyShaderModule(device, fragShader, nullptr);
-    vkDestroyPipeline(device, pipeline, nullptr);
+    vkDestroyPipeline(device, graphicsPipeline, nullptr);
     vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
     vkDestroyRenderPass(device, renderPass, nullptr);
     for (VkFramebuffer framebuffer : frameBuffers) {

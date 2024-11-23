@@ -4,7 +4,7 @@ TARGET := vulkan
 # Variables
 CXX := g++
 CC := gcc
-CXXFLAGS := -Wextra -Wpedantic -flto -std=c++17 -g -I./inc -I./inc/GL -D_GLIBCXX_DEBUG -fno-common
+CXXFLAGS := -Wextra -Wpedantic -flto -std=c++20 -g -I./inc -I./inc/GL -D_GLIBCXX_DEBUG -fno-common
 CFLAGS := -Wall -I./inc -g -I./inc/GL -D_GLIBCXX_DEBUG -fno-common
 LDFLAGS := -flto -lvulkan -lSDL2 -lSDL2main
 GLSLC := glslc

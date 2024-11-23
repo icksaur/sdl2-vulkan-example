@@ -1,9 +1,8 @@
 #pragma once
-
-#include <cmath>
 #include <cstring>
 #include <stdexcept>
 #include <algorithm>
+#include <cmath>
 
 template <typename T>
 class Vec3 {
@@ -524,7 +523,7 @@ void makePerspectiveProjectionMatrix(Mat16<T> & mat, T yFieldOfViewRadians, floa
 typedef Vec3<float> vec3f;
 typedef Mat16<float> mat16f;
 
-static float lerp(float from, float to, float amount) {
+static float _lerp(float from, float to, float amount) {
     return from * (1 - amount) + to * amount;
 }
 
@@ -588,10 +587,10 @@ struct Rotor {
         }
         Rotor r(
             vec3f(
-                lerp(bivector.x, to.bivector.x, amount),
-                lerp(bivector.y, to.bivector.y, amount),
-                lerp(bivector.z, to.bivector.z, amount)),
-            lerp(scalar, to.scalar, amount));
+                _lerp(bivector.x, to.bivector.x, amount),
+                _lerp(bivector.y, to.bivector.y, amount),
+                _lerp(bivector.z, to.bivector.z, amount)),
+            _lerp(scalar, to.scalar, amount));
 
         const float magnitude = sqrtf(r.scalar*r.scalar + r.bivector.dot(r.bivector));
         r.scalar /= magnitude;
