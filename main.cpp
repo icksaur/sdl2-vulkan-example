@@ -25,7 +25,7 @@ VkColorSpaceKHR colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
 VkImageUsageFlags desiredImageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
 VkFormat depthFormat = VK_FORMAT_D24_UNORM_S8_UINT; // some options are VK_FORMAT_D32_SFLOAT, VK_FORMAT_D32_SFLOAT_S8_UINT, VK_FORMAT_D24_UNORM_S8_UINT
 
-#define COMPUTE_VERTICES
+#define COMPUTE_VERTICES // comment out to try CPU uploaded vertex buffer
 size_t quadCount = 100;
 
 struct PipelineInfo {
@@ -335,6 +335,9 @@ VkDevice createLogicalDevice(VkPhysicalDevice& physicalDevice, unsigned int queu
     queueCreateInfo.pNext = NULL;
     queueCreateInfo.flags = 0;
 
+    VkPhysicalDeviceFeatures deviceFeatures = {};
+    deviceFeatures.samplerAnisotropy = VK_TRUE; // required for aniostropic filtering, the sampler must have anisotropy enabled too
+
     // Device creation information
     VkDeviceCreateInfo deviceCreateInfo;
     deviceCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -347,6 +350,7 @@ VkDevice createLogicalDevice(VkPhysicalDevice& physicalDevice, unsigned int queu
     deviceCreateInfo.pNext = NULL;
     deviceCreateInfo.pEnabledFeatures = NULL;
     deviceCreateInfo.flags = 0;
+    deviceCreateInfo.pEnabledFeatures = &deviceFeatures;
 
     // Finally we're ready to create a new device
     VkDevice device;
@@ -361,17 +365,20 @@ void getDeviceQueue(VkDevice device, int familyQueueIndex, VkQueue& outGraphicsQ
     vkGetDeviceQueue(device, familyQueueIndex, 0, &outGraphicsQueue);
 }
 
-void createSurface(SDL_Window* window, VkInstance instance, VkPhysicalDevice gpu, uint32_t graphicsFamilyQueueIndex, VkSurfaceKHR& outSurface) {
-    if (SDL_TRUE != SDL_Vulkan_CreateSurface(window, instance, &outSurface)) {
+VkSurfaceKHR createSurface(SDL_Window* window, VkInstance instance, VkPhysicalDevice gpu, uint32_t graphicsFamilyQueueIndex) {
+    VkSurfaceKHR surface; // SDL_Vulkan_DestroySurface doesn't seem to exist on my system.
+    if (SDL_TRUE != SDL_Vulkan_CreateSurface(window, instance, &surface)) {
         throw std::runtime_error("Unable to create Vulkan compatible surface using SDL");
     }
 
     // Make sure the surface is compatible with the queue family and gpu
     VkBool32 supported = false;
-    vkGetPhysicalDeviceSurfaceSupportKHR(gpu, graphicsFamilyQueueIndex, outSurface, &supported);
+    vkGetPhysicalDeviceSurfaceSupportKHR(gpu, graphicsFamilyQueueIndex, surface, &supported);
     if (VK_TRUE != supported) {
         throw std::runtime_error("Surface is not supported by physical device!");
     }
+
+    return surface;
 }
 
 bool getPresentationMode(VkSurfaceKHR surface, VkPhysicalDevice device, VkPresentModeKHR& ioMode) {
@@ -710,10 +717,16 @@ void generateMipmaps(VkDevice device, VkImage image, VkCommandPool commandPool, 
     writeToReadBarrier.subresourceRange.baseArrayLayer = 0;
     writeToReadBarrier.subresourceRange.layerCount = 1;
     writeToReadBarrier.subresourceRange.levelCount = 1;
-    writeToReadBarrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    writeToReadBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     writeToReadBarrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
     writeToReadBarrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
     writeToReadBarrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+
+    VkImageMemoryBarrier undefinedToWriteBarrier = writeToReadBarrier;
+    undefinedToWriteBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    undefinedToWriteBarrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    undefinedToWriteBarrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    undefinedToWriteBarrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
 
     VkImageMemoryBarrier readToSampleBarrier = writeToReadBarrier;
     readToSampleBarrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
@@ -737,6 +750,7 @@ void generateMipmaps(VkDevice device, VkImage image, VkCommandPool commandPool, 
     int mipHeight = height;
     
     for (size_t i=1; i<mipLevelCount; i++) {
+        undefinedToWriteBarrier.subresourceRange.baseMipLevel = i;
         writeToReadBarrier.subresourceRange.baseMipLevel = i - 1;
         readToSampleBarrier.subresourceRange.baseMipLevel = i - 1;
 
@@ -745,6 +759,14 @@ void generateMipmaps(VkDevice device, VkImage image, VkCommandPool commandPool, 
         blit.dstOffsets[1] = { mipWidth > 1 ? mipWidth / 2 : 1, mipHeight > 1 ? mipHeight / 2 : 1, 1 };
         blit.dstSubresource.mipLevel = i;
 
+        // this mip undefined -> dest
+        vkCmdPipelineBarrier(scopedCommandBuffer.commandBuffer,
+            VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
+            0, nullptr,
+            0, nullptr,
+            1, &undefinedToWriteBarrier);
+
+        // previous mip write -> read
         vkCmdPipelineBarrier(scopedCommandBuffer.commandBuffer,
             VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
             0, nullptr,
@@ -757,6 +779,7 @@ void generateMipmaps(VkDevice device, VkImage image, VkCommandPool commandPool, 
             1, &blit,
             VK_FILTER_LINEAR);
 
+        // previous mip read -> sample
         vkCmdPipelineBarrier(scopedCommandBuffer.commandBuffer,
             VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
             0, nullptr,
@@ -861,9 +884,6 @@ std::tuple<VkImage, VkDeviceMemory, VkImageView> createImageFromTGAFile(const ch
     copyBufferToImage(device, commandPool, graphicsQueue, stagingBuffer, image, width, height);
 
     generateMipmaps(device, image, commandPool, graphicsQueue, width, height, mipLevels);
-
-    // Transition to the final 2D image layout that allows us to sample in a shader.
-    transitionImageLayout(device, commandPool, graphicsQueue, image, format, 1, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
     vkFreeMemory(device, stagingMemory, nullptr);
     vkDestroyBuffer(device, stagingBuffer, nullptr);
@@ -1072,7 +1092,7 @@ VkSampler createSampler(VkDevice device) {
     return textureSampler;
 }
 
-void makeFramebuffers(VkDevice device, VkRenderPass renderPass, std::vector<VkImageView> & chainImageViews, std::vector<VkFramebuffer> & frameBuffers, VkImageView depthImageView) {
+void createFramebuffers(VkDevice device, VkRenderPass renderPass, std::vector<VkImageView> & chainImageViews, std::vector<VkFramebuffer> & frameBuffers, VkImageView depthImageView) {
     for (size_t i=0; i<chainImageViews.size(); i++) {
         VkImageView imageViews[] { chainImageViews[i], depthImageView };
 
@@ -1166,7 +1186,6 @@ VkRenderPass createRenderPass(VkDevice device) {
     subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
     subpass.colorAttachmentCount = 1;
     subpass.pColorAttachments = &colorAttachmentRef;
-
     subpass.pDepthStencilAttachment = &depthAttachmentRef;
 
     VkSubpassDependency dependency = {};
@@ -1408,12 +1427,6 @@ std::tuple<VkBuffer, VkDeviceMemory> createVertexBuffer(VkPhysicalDevice gpu, Vk
     return std::make_tuple(vertexBuffer, vertexBufferMemory);
 }
 
-std::tuple<VkBuffer, VkDeviceMemory> createSSBO(VkPhysicalDevice gpu, VkDevice device, size_t byteCount) {
-    VkBuffer buffer;
-    VkDeviceMemory memory;
-    return createBuffer(gpu, device, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, byteCount);
-}
-
 VkDescriptorSetLayout createDescriptorSetLayout(VkDevice device) {
     VkDescriptorSetLayoutBinding uboLayoutBinding = {};
     uboLayoutBinding.binding = 0; // match binding point in shader
@@ -1647,13 +1660,13 @@ void recordRenderPass(
     renderPassBeginInfo.clearValueCount = 2;                 // Two clear values (color and depth)
     renderPassBeginInfo.pClearValues = clearValues;
 
-    // begin recording the render pass
-    vkCmdBeginRenderPass(commandBuffer, &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
-
     // bind and dispatch compute
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, computePipeline);
     vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipelineLayout, 0, 1, &descriptorSet, 0, NULL);
-    vkCmdDispatch(commandBuffer, 1, 1, 1); 
+    vkCmdDispatch(commandBuffer, 1, 1, 1);
+
+    // begin recording the render pass
+    vkCmdBeginRenderPass(commandBuffer, &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
 
     // Bind the descriptor which contains the shader uniform buffer
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
@@ -1772,13 +1785,12 @@ int main(int argc, char *argv[]) {
 
     // Create the surface we want to render to, associated with the window we created before
     // This call also checks if the created surface is compatible with the previously selected physical device and associated render queue
-    VkSurfaceKHR presentationSurface;
-    createSurface(window, instance, gpu, graphicsQueueIndex, presentationSurface);
+    VkSurfaceKHR presentationSurface = createSurface(window, instance, gpu, graphicsQueueIndex);
 
     VkQueue presentationQueue = getPresentationQueue(gpu, device, graphicsQueueIndex, presentationSurface);
 
     // swap chain with image handles and views
-    VkSwapchainKHR swapchain = VK_NULL_HANDLE;
+    VkSwapchainKHR swapchain = VK_NULL_HANDLE; // start null as this function will also recreate an old swapchain
     createSwapChain(presentationSurface, gpu, device, swapchain);
 
     std::vector<VkImage> chainImages;
@@ -1786,7 +1798,7 @@ int main(int argc, char *argv[]) {
 
     std::vector<VkImageView> chainImageViews(chainImages.size());
     makeChainImageViews(device, swapchain, chainImages, chainImageViews);
-
+   
     // get the queue we want to submit the actual commands to
     VkQueue graphicsQueue;
     vkGetDeviceQueue(device, graphicsQueueIndex, 0, &graphicsQueue);
@@ -1847,8 +1859,8 @@ int main(int argc, char *argv[]) {
     std::tie(depthImageView, depthImage, depthMemory) = createDepthBuffer(gpu, device, commandPool, graphicsQueue);
 
     // buffers to render to for presenting
-    std::vector<VkFramebuffer> frameBuffers(chainImages.size());
-    makeFramebuffers(device, renderPass, chainImageViews, frameBuffers, depthImageView);
+    std::vector<VkFramebuffer> presentFramebuffers(chainImages.size());
+    createFramebuffers(device, renderPass, chainImageViews, presentFramebuffers, depthImageView);
 
     VkPipeline graphicsPipeline = createGraphicsPipeline(device, pipelineLayout, renderPass, vertShader, fragShader);
     VkPipeline computePipeline = createComputePipeline(device, pipelineLayout, compShader);
@@ -1889,7 +1901,7 @@ int main(int argc, char *argv[]) {
         }
 
 #ifdef COMPUTE_VERTICES
-        recordRenderPass(computePipeline, graphicsPipeline, renderPass, frameBuffers[nextImage], commandBuffers[nextImage], shaderStorageBuffer, pipelineLayout, descriptorSet);
+        recordRenderPass(computePipeline, graphicsPipeline, renderPass, presentFramebuffers[nextImage], commandBuffers[nextImage], shaderStorageBuffer, pipelineLayout, descriptorSet);
 #else
         recordRenderPass(computePipeline, graphicsPipeline, renderPass, frameBuffers[nextImage], commandBuffers[nextImage], vertexBuffer, pipelineLayout, descriptorSet);
 #endif
@@ -1900,7 +1912,7 @@ int main(int argc, char *argv[]) {
             // This is a common Vulkan situation handled automatically by OpenGL.
             // We need to remake our swap chain, image views, and framebuffers.
             vkDeviceWaitIdle(device);
-            for (VkFramebuffer framebuffer : frameBuffers) {
+            for (VkFramebuffer framebuffer : presentFramebuffers) {
                 vkDestroyFramebuffer(device, framebuffer, nullptr);
             }
             for (VkImageView view : chainImageViews) {
@@ -1918,7 +1930,7 @@ int main(int argc, char *argv[]) {
             createSwapChain(presentationSurface, gpu, device, swapchain);
             getSwapChainImageHandles(device, swapchain, chainImages);
             makeChainImageViews(device, swapchain, chainImages, chainImageViews);
-            makeFramebuffers(device, renderPass, chainImageViews, frameBuffers, depthImageView);
+            createFramebuffers(device, renderPass, chainImageViews, presentFramebuffers, depthImageView);
         }
         SDL_Delay(100);
         
@@ -1957,12 +1969,14 @@ int main(int argc, char *argv[]) {
     vkDestroySemaphore(device, imageAvailableSemaphore, nullptr);
     vkDestroySemaphore(device, renderFinishedSemaphore, nullptr);
     vkDestroyFence(device, fence, nullptr);
+    vkDestroyShaderModule(device, compShader, nullptr);
     vkDestroyShaderModule(device, vertShader, nullptr);
     vkDestroyShaderModule(device, fragShader, nullptr);
+    vkDestroyPipeline(device, computePipeline, nullptr);
     vkDestroyPipeline(device, graphicsPipeline, nullptr);
     vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
     vkDestroyRenderPass(device, renderPass, nullptr);
-    for (VkFramebuffer framebuffer : frameBuffers) {
+    for (VkFramebuffer framebuffer : presentFramebuffers) {
         vkDestroyFramebuffer(device, framebuffer, nullptr);
     }
     for (VkImageView view : chainImageViews) {
