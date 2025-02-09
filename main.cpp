@@ -1730,7 +1730,7 @@ bool presentQueue(VkQueue presentQueue, VkSwapchainKHR & swapchain, VkSemaphore 
 
     VkResult result = vkQueuePresentKHR(presentQueue, &presentInfo);
     if (result != VK_SUCCESS) {
-        if (VK_ERROR_OUT_OF_DATE_KHR == result) {
+        if (VK_ERROR_OUT_OF_DATE_KHR == result || VK_SUBOPTIMAL_KHR == result) {
             return false;
         } else {
             throw std::runtime_error("failed to present swap chain image!");
@@ -1775,7 +1775,7 @@ int main(int argc, char *argv[]) {
     VkDebugReportCallbackEXT callback;
     setupDebugCallback(instance, callback);
 
-    // Select GPU after succsessful creation of a vulkan instance (jeeeej no global states anymore)
+    // Select GPU after succsessful creation of a vulkan instance (no global states anymore)
     VkPhysicalDevice gpu;
     unsigned int graphicsQueueIndex(-1);
     selectGPU(instance, gpu, graphicsQueueIndex);
@@ -1852,7 +1852,7 @@ int main(int argc, char *argv[]) {
 
     VkRenderPass renderPass = createRenderPass(device);
 
-    // depth buffer
+    // depth buffer.  We should use one per swapchain image.
     VkImageView depthImageView;
     VkImage depthImage;
     VkDeviceMemory depthMemory;
@@ -1870,17 +1870,31 @@ int main(int argc, char *argv[]) {
     VkDeviceMemory deviceMemory;
     std::tie(vertexBuffer, deviceMemory) = createVertexBuffer(gpu, device);
 
-    // command buffers for drawing
-    std::vector<VkCommandBuffer> commandBuffers(chainImages.size());
-    for (auto & commandBuffer : commandBuffers) {
-        commandBuffer = createCommandBuffer(device, commandPool);
-    }
+    // command buffer for drawing
+    VkCommandBuffer commandBuffer = createCommandBuffer(device, commandPool);
 
     // sync primitives
     // It is a good idea to have a separate semaphore for each swapchain image, but for simplicity we use a single one.
     VkSemaphore imageAvailableSemaphore = createSemaphore(device);
     VkSemaphore renderFinishedSemaphore = createSemaphore(device);
     VkFence fence = createFence(device);
+
+    /*
+    This is most of what we need, but not the whole story.  Most applications will want dynamic data, and to keep the GPU busy
+    by rendering to each swapchain image as fast as it can.  To get dynamic memory, you would need a buffer per swapchain image.
+    The others might be "in flight" and still be used by the GPU.
+
+    To synchronize them, we use fences for GPU-CPU sync, and semaphores for GPU-GPU sync.  The tricky bit is that vkAcquireNextImageKHR
+    is not guaranteed to return indices in a predictable order.  So what semaphore or fence to use or buffer to modify?  Use the oldest one.
+    Only couple presentatio images to the nextImage modified by vkAcquireNextImageKHR.  Have an array/vector of other objects per swapchain
+    image, and use them round-robin without regard to the nextIndex from vkAcquireNextImageKHR.
+
+    If you want to use this code in a high-performance program, try replacing our fence and semaphores with N per swapChain index.
+    Ensure you don't use any wait idle functions in your loop other than to remake the swapchain images.
+
+    If you want to use this code in a low-performance program, like a widget tool or other UI, it might be great to conserve memory
+    and GPU time.  In that case you may want vkQueueWaitIdle and vkDeviceWaitIdle.
+    */
     
     uint nextImage = 0;
 
@@ -1901,11 +1915,11 @@ int main(int argc, char *argv[]) {
         }
 
 #ifdef COMPUTE_VERTICES
-        recordRenderPass(computePipeline, graphicsPipeline, renderPass, presentFramebuffers[nextImage], commandBuffers[nextImage], shaderStorageBuffer, pipelineLayout, descriptorSet);
+        recordRenderPass(computePipeline, graphicsPipeline, renderPass, presentFramebuffers[nextImage], commandBuffer, shaderStorageBuffer, pipelineLayout, descriptorSet);
 #else
-        recordRenderPass(computePipeline, graphicsPipeline, renderPass, frameBuffers[nextImage], commandBuffers[nextImage], vertexBuffer, pipelineLayout, descriptorSet);
+        recordRenderPass(computePipeline, graphicsPipeline, renderPass, frameBuffers[nextImage], commandBuffer, vertexBuffer, pipelineLayout, descriptorSet);
 #endif
-        submitCommandBuffer(graphicsQueue, commandBuffers[nextImage], imageAvailableSemaphore, renderFinishedSemaphore);
+        submitCommandBuffer(graphicsQueue, commandBuffer, imageAvailableSemaphore, renderFinishedSemaphore);
         if (!presentQueue(presentationQueue, swapchain, renderFinishedSemaphore, nextImage)) {
             std::cout << "swap chain out of date, trying to remake" << std::endl;
 
@@ -1935,14 +1949,12 @@ int main(int argc, char *argv[]) {
         SDL_Delay(100);
         
         vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX);
-        vkResetCommandBuffer(commandBuffers[nextImage], 0); // manually reset, otherwise implicit reset causes warnings
+        vkResetCommandBuffer(commandBuffer, 0); // manually reset, otherwise implicit reset causes warnings
     }
 
     vkQueueWaitIdle(graphicsQueue); // wait until we're done or the render finished semaphore may be in use
 
-    for (auto commandBuffer : commandBuffers) {
-        vkFreeCommandBuffers(device, commandPool, 1, &commandBuffer);
-    }
+    vkFreeCommandBuffers(device, commandPool, 1, &commandBuffer);
     vkDestroyCommandPool(device, commandPool, nullptr);
     vkDestroyBuffer(device, vertexBuffer, nullptr);
     vkFreeMemory(device, deviceMemory, nullptr);
